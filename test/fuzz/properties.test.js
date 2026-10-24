@@ -51,10 +51,14 @@ function run (op, args, cwd, timeout = 120000) {
   const argv = process.platform === 'linux'
     ? ['sh', ['-c', 'ulimit -v 4000000; exec "$0" "$@"', process.execPath, caseJs, file]]
     : [process.execPath, [caseJs, file]]
-  const child = spawnSync(argv[0], argv[1], { cwd: cwd || dir, encoding: 'utf8', timeout })
+  // maxBuffer: spawnSync's default (1 MB) kills a child whose output is larger, and builtinLib('lib.dom.d.ts') is
+  // 2.4 MB of JSON; that showed up as a crash on CI (aarch64 gnu, 2026-10-24).
+  const child = spawnSync(argv[0], argv[1], { cwd: cwd || dir, encoding: 'utf8', timeout, maxBuffer: 256 << 20 })
   rmSync(dir, { recursive: true, force: true })
   if (child.status !== 0 || child.signal) {
-    return { crashed: { status: child.status, signal: child.signal, stderr: (child.stderr || '').slice(-2000) } }
+    return {
+      crashed: { status: child.status, signal: child.signal, error: child.error?.code, stderr: (child.stderr || '').slice(-2000) }
+    }
   }
   return JSON.parse(child.stdout)
 }
@@ -108,8 +112,8 @@ const anyValue = fc.anything({
 })
 // Strings that stress escaping: JSON's special characters, controls, separators, astral characters.
 const nastyString = fc.string({
-  unit: fc.oneof(fc.constantFrom('"', '\\', '\n', '\r', '\t', '\b', '\f', '\u0000', '\u001f', '\u007f', ' ',
-    ' ', '﻿', '/', '\'', '`', '$', '{', '}'), fc.string({ unit: 'binary', minLength: 1, maxLength: 1 })),
+  unit: fc.oneof(fc.constantFrom('"', '\\', '\n', '\r', '\t', '\b', '\f', '\u0000', '\u001f', '\u007f', '\u2028',
+    '\u2029', '\ufeff', '/', '\'', '`', '$', '{', '}'), fc.string({ unit: 'binary', minLength: 1, maxLength: 1 })),
   maxLength: 40
 })
 // File names that are fine on Linux and macOS but awkward for escaping: quotes, spaces, '#', Unicode.
