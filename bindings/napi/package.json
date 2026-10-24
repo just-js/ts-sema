@@ -1,0 +1,34 @@
+{
+  "name": "@beardsoft/ts-sema",
+  "version": "0.0.0",
+  "description": "Bun's TypeScript type checker (bun check, a port of typescript-go) for Node and Bun, as an N-API addon; no node-gyp, no tsc",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE",
+    "LICENSE-bun.md",
+    "LICENSE-mimalloc",
+    "NOTICE"
+  ],
+  "keywords": ["typescript", "type-checker", "tsc", "bun", "napi", "ffi"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/just-js/ts-sema.git",
+    "directory": "bindings/napi"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {}
+}

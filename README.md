@@ -23,6 +23,8 @@ The Bun commit, its TypeScript version and the rest of the pins are in
 | `sync.js` | refreshes `vendor/`, `codegen/`, `capi/Cargo.lock` and `upstream.json` from a Bun commit or tag |
 | `bindings/` | `napi/` (N-API addon for Node, Bun and Deno) and `ffi/` (examples for each runtime's FFI); see [`bindings/README.md`](bindings/README.md) |
 | `vendor/node-api-headers/` | the N-API C headers (npm `node-api-headers`, MIT), for `bindings/napi` |
+| `npm.js` | makes (and with `--publish` publishes) the npm packages for a release from its assets; see npm |
+| `release.js` | tags `main`, pushes the tag, publishes the GitHub release (`node release.js <version>`) |
 | `libs.js` | writes a set of built-in lib files (plus what they reference) to a directory; `--list` |
 | `test/` | `check.c` and `fixture/`, the smoke test (`node build.js --test`) |
 | `.github/workflows/` | CI builds and the release assets (see Releases) |
@@ -103,6 +105,20 @@ gh attestation verify ts-sema-x86_64-unknown-linux-musl.tar.gz -R just-js/ts-sem
 Every build uses Bun's pinned nightly (`upstream.json` `rust_toolchain`). The
 musl builds are cross-built on Ubuntu with `musl-gcc`, Intel macOS on Apple
 silicon; the test runs on the gnu and Apple-silicon builds.
+
+## npm
+
+`@beardsoft/ts-sema` (the N-API addon's JS API, `bindings/napi`) and one package per platform,
+`@beardsoft/ts-sema-{linux-x64,linux-x64-musl,linux-arm64,linux-arm64-musl,darwin-arm64}`, each a single
+`ts_sema.node`, which npm and Bun pick by `os`/`cpu`/`libc`. All six share the release's version.
+
+```sh
+node npm.js 0.0.1 --dry-run     # download + verify the release's assets, write dist/npm/, npm pack --dry-run
+node npm.js 0.0.1 --publish     # same, then npm publish (platform packages first); needs npm login
+```
+
+`npm.js` checks every asset against the release's `SHA256SUMS`; each package carries `LICENSE`, Bun's and mimalloc's
+licenses and a `NOTICE` of what the addon contains. Intel macOS has no package (no addon build).
 
 ## The C ABI
 
