@@ -42,3 +42,30 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release upload "${{ github.event.release.tag_name }}" ts-sema-*.tar.gz SHA256SUMS --clobber
+
+  # The npm packages, from the assets just uploaded (npm.js checks them against SHA256SUMS), **staged** with npm
+  # trusted publishing: no npm token (npm checks this workflow's OIDC identity), a provenance attestation per package,
+  # and nothing public until a maintainer approves each staged version with 2FA (npmjs.com, or npm stage list +
+  # npm stage approve <id>). Needs a trusted publisher (GitHub Actions, just-js/ts-sema, release.yml, "allow npm
+  # publish" off) on each of the six packages, npm 11.15.0+ and Node 22.14+. A prerelease goes to "next".
+  npm:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write          # OIDC token for npm trusted publishing (and provenance)
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: npm 11.15.0+
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: stage
+        run: |
+          node npm.js "${{ github.event.release.tag_name }}" --stage ${{ github.event.release.prerelease && '--tag next' || '' }}

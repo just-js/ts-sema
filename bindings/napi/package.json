@@ -2,6 +2,31 @@
   "name": "@beardsoft/ts-sema",
   "version": "0.0.0",
   "description": "Bun's TypeScript type checker (bun check, a port of typescript-go) for Node and Bun, as an N-API addon; no node-gyp, no tsc",
+  "keywords": [
+    "typescript",
+    "type-checker",
+    "typecheck",
+    "tsc",
+    "typescript-go",
+    "tsgo",
+    "bun",
+    "bun-check",
+    "napi",
+    "node-addon",
+    "ffi",
+    "native"
+  ],
+  "homepage": "https://github.com/just-js/ts-sema#readme",
+  "bugs": {
+    "url": "https://github.com/just-js/ts-sema/issues"
+  },
+  "license": "MIT",
+  "author": "Andrew Johnston",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/just-js/ts-sema.git",
+    "directory": "bindings/napi"
+  },
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -9,7 +34,8 @@
     ".": {
       "types": "./index.d.ts",
       "default": "./index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
@@ -20,15 +46,11 @@
     "LICENSE-mimalloc",
     "NOTICE"
   ],
-  "keywords": ["typescript", "type-checker", "tsc", "bun", "napi", "ffi"],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/just-js/ts-sema.git",
-    "directory": "bindings/napi"
-  },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "optionalDependencies": {}
 }

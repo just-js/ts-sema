@@ -106,6 +106,47 @@ Every build uses Bun's pinned nightly (`upstream.json` `rust_toolchain`). The
 musl builds are cross-built on Ubuntu with `musl-gcc`, Intel macOS on Apple
 silicon; the test runs on the gnu and Apple-silicon builds.
 
+## Releasing
+
+From an up-to-date `main` whose push build passed:
+
+```sh
+node release.js 0.0.2              # bump bindings/napi/package.json, commit, tag, push main + tag, publish
+```
+
+[release.yml](.github/workflows/release.yml) then builds every target, uploads the assets and `SHA256SUMS`, attests
+them (GitHub), and its `npm` job **stages** the six npm packages with npm trusted publishing and provenance. Nothing
+is public on npm until you approve each staged version with 2FA, platform packages first, the main one last:
+
+```sh
+npm stage list @beardsoft/ts-sema-linux-x64      # the stage id of the new version (likewise for the others)
+npm stage approve <stage-id>                     # or approve on npmjs.com
+```
+
+By hand instead of CI, as for 0.0.1 (no provenance; needs `npm login`):
+
+```sh
+node npm.js 0.0.2 --publish        # once the release run is green
+```
+
+- **Versions** are independent semver, no `v` prefix; the tag, the GitHub release and all six npm packages share it.
+- **`release.js`** sets `bindings/napi/package.json`'s version and commits it to `main` as
+  `chore: release <version> [skip ci]`, tags that commit and pushes `main` and the tag together (`--atomic`).
+  A version with a `-` suffix (`0.1.0-beta.1`) becomes a prerelease, published to npm's `next` tag.
+  It refuses unless `main` is clean, equal to `origin/main`, and its push build ("build on push")
+  passed; it needs `$GH_TOKEN` (Contents: Read and write). `--dry-run` does every check and shows the release.
+- **Trusted publishing** needs, once per package on npmjs.com: Settings → Trusted publisher → GitHub Actions, user
+  `just-js`, repository `ts-sema`, workflow `release.yml`, with "allow npm publish" **off** (CI can only stage,
+  so a human approves every version). A GitHub prerelease goes to npm's `next` tag.
+- **By hand, wait for the release build** ([release.yml runs](https://github.com/just-js/ts-sema/actions/workflows/release.yml))
+  before `npm.js`: it downloads the release's assets and checks them against `SHA256SUMS`.
+- **`npm.js`** needs an npm login with publish rights on `@beardsoft` (`npm login`). `--dry-run` first shows each
+  package's contents (`npm pack --dry-run`); `--tag next` publishes a prerelease without moving `latest`.
+- **Check** afterwards: `npm install @beardsoft/ts-sema@0.0.2` in an empty project, `checkSync` on `test/fixture`
+  (one TS2322), and `npm audit signatures`.
+- **Update** the version table in `bindings/napi/README.md` (the npm page) when the Bun or TypeScript version
+  changes.
+
 ## npm
 
 `@beardsoft/ts-sema` (the N-API addon's JS API, `bindings/napi`) and one package per platform,

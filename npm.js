@@ -2,11 +2,15 @@
 //   @beardsoft/ts-sema                      index.js, index.d.ts (bindings/napi), optionalDependencies on:
 //   @beardsoft/ts-sema-<os>-<arch>[-musl]   one ts_sema.node each, selected by npm/bun through os/cpu/libc
 //
-//   node npm.js <version> [--dry-run] [--publish] [--tag <dist-tag>] [--from <dir>]
+//   node npm.js <version> [--dry-run | --stage | --publish] [--tag <dist-tag>] [--from <dir>]
 //
 // Downloads ts-sema-<target>.tar.gz of release <version> and checks it against the release's SHA256SUMS (--from:
 // a directory with those files instead), unpacks ts_sema.node from each, and writes the packages to dist/npm/.
-// --dry-run runs `npm pack --dry-run` in each; --publish runs `npm publish --access public` (platform packages
+// --dry-run runs `npm pack --dry-run` in each. --stage runs `npm stage publish`: each version waits, private, until
+// a maintainer approves it with 2FA (npmjs.com, or `npm stage list` / `npm stage approve <id>`; npm 11.15.0+); the
+// release workflow stages, because direct publishing from CI is off for these packages. --publish runs
+// `npm publish --access public` directly (by hand, with an npm login). In GitHub Actions both pass --provenance
+// (`npm stage publish` doesn't add it by itself). Either way the platform packages go first
 // first, the main package last, so it never points at versions that aren't there). Needs Node 20+, tar and, to
 // publish, an npm login with rights on @beardsoft. Intel macOS has no addon build, so no package.
 import { execFileSync } from 'node:child_process'
@@ -39,27 +43,6 @@ const NOTICE = `ts_sema.node contains, besides ts-sema's own code (LICENSE, MIT)
 - The Rust standard library (https://github.com/rust-lang/rust, MIT OR Apache-2.0).
 `
 
-const MAIN_README = `# @beardsoft/ts-sema
-
-Bun's TypeScript type checker (\`bun check\`, a port of typescript-go) for Node and Bun, as an N-API addon: no
-node-gyp, no \`tsc\`. The TypeScript lib files of its own version are built in. From https://github.com/${REPO}.
-
-\`\`\`js
-import { check, checkSync, setLibs, builtinLibSet, libraryPath } from '@beardsoft/ts-sema'
-
-const report = await check('path/to/tsconfig.json')       // on a worker thread
-const again = checkSync('path/to/project', { threads: 2 })
-// { ok, errors, files_loaded, files_checked, load_ms, check_ms, output }
-
-// Once per process, before the first check: only these lib files exist (here ES2022, no DOM).
-setLibs(builtinLibSet(['es2022']))
-\`\`\`
-
-\`libraryPath\` is the addon's path; it is also a plain shared library with the C ABI (\`bun_sema_check\`, ...), for
-\`node:ffi\`, \`bun:ffi\` or any other FFI. Platforms: Linux x64/arm64 (glibc and musl), macOS arm64. Checks run one at
-a time in a process. See NOTICE for what the addon contains and the licenses.
-`
-
 const args = process.argv.slice(2)
 const opt = name => {
   const i = args.indexOf(name)
@@ -68,7 +51,7 @@ const opt = name => {
 const flag = name => args.includes(name)
 const version = args.find((a, i) => !a.startsWith('--') && !['--tag', '--from'].includes(args[i - 1]))
 if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) {
-  console.error('usage: node npm.js <version> [--dry-run] [--publish] [--tag <dist-tag>] [--from <dir>]')
+  console.error('usage: node npm.js <version> [--dry-run | --stage | --publish] [--tag <dist-tag>] [--from <dir>]')
   process.exit(2)
 }
 const log = s => console.log(`npm: ${s}`)
@@ -91,11 +74,16 @@ const out = join(root, 'dist/npm')
 rmSync(out, { recursive: true, force: true })
 const licenses = { LICENSE: join(root, 'LICENSE'), 'LICENSE-bun.md': join(root, 'vendor/bun/LICENSE.md'),
   'LICENSE-mimalloc': join(root, 'vendor/mimalloc/LICENSE') }
+// Shared metadata for all six packages.
 const common = {
   version,
+  author: 'Andrew Johnston',
   license: 'MIT',
-  repository: { type: 'git', url: `git+https://github.com/${REPO}.git` },
-  homepage: `https://github.com/${REPO}`
+  homepage: `https://github.com/${REPO}#readme`,
+  bugs: { url: `https://github.com/${REPO}/issues` },
+  repository: { type: 'git', url: `git+https://github.com/${REPO}.git`, directory: 'bindings/napi' },
+  engines: { node: '>=18' },
+  publishConfig: { access: 'public' }
 }
 function writeExtras (dir, readme) {
   for (const [name, path] of Object.entries(licenses)) copyFileSync(path, join(dir, name))
@@ -125,7 +113,9 @@ try {
     writeFileSync(join(dir, 'package.json'), JSON.stringify({
       name, ...common,
       description: `ts-sema (Bun's TypeScript checker) N-API addon for ${target}`,
+      type: 'commonjs',
       main: 'ts_sema.node',
+      keywords: ['typescript', 'type-checker', 'napi', 'prebuilt', target],
       files: ['ts_sema.node', 'README.md', 'NOTICE', ...Object.keys(licenses)],
       os: [info.os], cpu: [info.cpu], ...(info.libc ? { libc: [info.libc] } : {})
     }, null, 2) + '\n')
@@ -137,7 +127,9 @@ try {
   const main = join(out, 'ts-sema')
   mkdirSync(main, { recursive: true })
   for (const file of ['index.js', 'index.d.ts']) copyFileSync(join(root, 'bindings/napi', file), join(main, file))
-  writeExtras(main, MAIN_README)
+  // The npm page: bindings/napi/README.md, its badges pointing at this version.
+  writeExtras(main, readFileSync(join(root, 'bindings/napi/README.md'), 'utf8')
+    .replace(/(@beardsoft\/ts-sema\/)\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?/g, `$1${version}`))
   writeFileSync(join(main, 'package.json'), JSON.stringify({
     ...template, ...common, version,
     optionalDependencies: Object.fromEntries(packages.map(p => [p.name, version]))
@@ -149,12 +141,21 @@ try {
 }
 
 const tag = opt('--tag')
+const publishArgs = ['--access', 'public', ...(tag ? ['--tag', tag] : []),
+  ...(process.env.GITHUB_ACTIONS === 'true' ? ['--provenance'] : [])]
 for (const { name, dir } of packages) {
-  if (flag('--publish')) {
+  if (flag('--stage')) {
+    log(`staging ${name}@${version}`)
+    run('npm', ['stage', 'publish', ...publishArgs], dir)
+  } else if (flag('--publish')) {
     log(`publishing ${name}@${version}`)
-    run('npm', ['publish', '--access', 'public', ...(tag ? ['--tag', tag] : [])], dir)
+    run('npm', ['publish', ...publishArgs], dir)
   } else if (flag('--dry-run')) {
     run('npm', ['pack', '--dry-run'], dir)
   }
 }
 log(`packages in ${out}`)
+if (flag('--stage')) {
+  log(`staged ${packages.length} packages: approve each with 2FA on npmjs.com or \`npm stage list\` + \`npm stage approve <id>\`, ` +
+    'the platform packages before the main one')
+}

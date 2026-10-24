@@ -1,14 +1,17 @@
 #!/usr/bin/env node
-// Tags main as a ts-sema version, pushes the tag, and publishes the GitHub release that starts the release build
-// (.github/workflows/release.yml: build, SHA256SUMS, attestations, assets). Node 20+, no dependencies.
+// Releases ts-sema: sets the version in bindings/napi/package.json and commits that to main
+// ("chore: release <version> [skip ci]"), tags the commit, pushes main and the tag together, and publishes the GitHub
+// release that starts the release build (.github/workflows/release.yml: build every target, SHA256SUMS, attestations,
+// assets, then the npm packages with provenance). Node 20+, no dependencies.
 //
-//   node release.js [--dry-run] <version>        e.g. node release.js 0.0.1
+//   node release.js [--dry-run] <version>        e.g. node release.js 0.0.2
 //
-// The tag is the version as given (like lo's). Needs $GH_TOKEN or $GITHUB_TOKEN (Contents: Read and write). Local main
-// must equal origin/main and be clean, and the push build of that commit must have passed. --dry-run does every check
-// and prints what would happen. Re-running when the tag is already on origin at the same commit only publishes.
+// The tag is the version as given, no "v" (like lo's); a version with a "-" suffix is a GitHub prerelease (npm tag
+// "next"). Needs $GH_TOKEN or $GITHUB_TOKEN (Contents: Read and write). Local main must equal origin/main and be clean,
+// and the push build of the commit being released must have passed. --dry-run does every check and prints what would
+// happen. Re-running when the tag is already on origin at local main only publishes.
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 
 function fail (msg) {
   console.error(`release: ${msg}`)
@@ -35,17 +38,26 @@ const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version':
 git('fetch', '-q', '--tags', 'origin')
 if (git('rev-parse', '--abbrev-ref', 'HEAD') !== 'main') fail('not on main')
 if (git('status', '--porcelain')) fail('the working tree has changes')
-const sha = git('rev-parse', 'HEAD')
+let sha = git('rev-parse', 'HEAD')
 if (sha !== git('rev-parse', 'origin/main')) fail('local main is not origin/main; pull or push first')
 
-// The push build ("build on push") of this commit must have passed.
-const runs = await (await fetch(`${api}/actions/runs?head_sha=${sha}&event=push&per_page=20`, { headers })).json()
-const push = (runs.workflow_runs || []).find(r => r.name === 'build on push')
-if (!push) fail(`no push build for ${sha.slice(0, 7)}`)
-if (push.conclusion !== 'success') fail(`the push build for ${sha.slice(0, 7)} is ${push.status}/${push.conclusion}: ${push.html_url}`)
-
-const remote = git('ls-remote', '--tags', 'origin', `refs/tags/${version}`).split('\t')[0]
+const remote = git('ls-remote', '--tags', 'origin', `refs/tags/${version}^{}`).split('\t')[0] ||
+  git('ls-remote', '--tags', 'origin', `refs/tags/${version}`).split('\t')[0]
 if (remote && remote !== sha) fail(`tag ${version} already exists on origin at ${remote}`)
+
+// The push build ("build on push") of the commit being released must have passed. A release commit
+// ("chore: release ... [skip ci]") has none, so on a re-run its parent is the one that was checked.
+const isReleaseCommit = /^chore: release \S+ \[skip ci\]$/.test(git('log', '-1', '--format=%s', sha))
+const built = isReleaseCommit ? git('rev-parse', `${sha}^`) : sha
+const runs = await (await fetch(`${api}/actions/runs?head_sha=${built}&event=push&per_page=20`, { headers })).json()
+const push = (runs.workflow_runs || []).find(r => r.name === 'build on push')
+if (!push) fail(`no push build for ${built.slice(0, 7)}`)
+if (push.conclusion !== 'success') fail(`the push build for ${built.slice(0, 7)} is ${push.status}/${push.conclusion}: ${push.html_url}`)
+
+// The version in the main npm package's template (npm.js stamps every package with the release version anyway).
+const pkgPath = new URL('./bindings/napi/package.json', import.meta.url)
+const pkgText = readFileSync(pkgPath, 'utf8')
+const bump = !remote && JSON.parse(pkgText).version !== version
 if (!remote && git('tag', '--list', version)) fail(`tag ${version} exists locally but not on origin`)
 
 const existing = await fetch(`${api}/releases/tags/${version}`, { headers })
@@ -57,18 +69,30 @@ const body = [
   `- Built with Rust ${up.rust_toolchain}; assets: \`ts-sema-<target>.tar.gz\` (static + shared library, \`ts_sema.node\`, header, \`build.json\`), \`SHA256SUMS\``,
   `- Verify: \`gh attestation verify ts-sema-<target>.tar.gz -R ${repo}\``
 ].join('\n')
-const payload = { tag_name: version, name: version, body, draft: false, prerelease: false }
+const payload = { tag_name: version, name: version, body, draft: false, prerelease: version.includes('-') }
 
 if (dryRun) {
-  console.log(`would ${remote ? '' : `tag ${sha} as ${version}, push the tag, and `}publish release ${version} on ${repo}:`)
+  const steps = []
+  if (bump) steps.push(`set bindings/napi/package.json to ${version} and commit "chore: release ${version} [skip ci]"`)
+  if (!remote) steps.push(`tag ${bump ? 'that commit' : sha} as ${version}, push ${bump ? 'main and ' : ''}the tag`)
+  steps.push(`publish ${payload.prerelease ? 'pre' : ''}release ${version} on ${repo}`)
+  console.log(`would ${steps.join(', then ')}:`)
   console.log(JSON.stringify(payload, null, 2))
   process.exit(0)
 }
 
+if (bump) {
+  writeFileSync(pkgPath, pkgText.replace(/("version":\s*")[^"]*(")/, `$1${version}$2`))
+  git('add', 'bindings/napi/package.json')
+  git('commit', '-q', '-m', `chore: release ${version} [skip ci]`)
+  sha = git('rev-parse', 'HEAD')
+  console.log(`committed ${sha.slice(0, 7)}: chore: release ${version} [skip ci]`)
+}
 if (!remote) {
   git('tag', '-a', version, '-m', `ts-sema ${version}`, sha)
-  git('push', '-q', 'origin', `refs/tags/${version}`)
-  console.log(`tagged ${sha} as ${version} and pushed`)
+  // main and the tag together: either both land on origin, or neither.
+  git('push', '-q', '--atomic', 'origin', ...(bump ? ['main'] : []), `refs/tags/${version}`)
+  console.log(`tagged ${sha.slice(0, 7)} as ${version} and pushed ${bump ? 'main + ' : ''}the tag`)
 }
 const res = await fetch(`${api}/releases`, { method: 'POST', headers, body: JSON.stringify(payload) })
 if (res.status !== 201) fail(`creating release ${version} failed (HTTP ${res.status}): ${await res.text()}`)
