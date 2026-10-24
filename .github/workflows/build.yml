@@ -1,0 +1,95 @@
+name: build ts-sema (reusable)
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl targets are cross-built on Ubuntu (Rust's musl target, musl-gcc for mimalloc): JavaScript actions
+          # don't run in Alpine containers on arm64. The smoke test links with the host's libzstd, so it runs where
+          # the target is the host's own.
+          - target: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-24.04
+            cc: gcc
+            test: true
+          - target: x86_64-unknown-linux-musl
+            runs-on: ubuntu-24.04
+            cc: musl-gcc
+          - target: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
+            cc: gcc
+            test: true
+          - target: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04-arm
+            cc: musl-gcc
+          - target: aarch64-apple-darwin
+            runs-on: macos-15
+            cc: clang
+            test: true
+          # Intel macOS, cross-built on Apple silicon (as lo's mac-x64 build is). No test: Homebrew's zstd is arm64.
+          - target: x86_64-apple-darwin
+            runs-on: macos-15
+            cc: clang
+            cflags: -arch x86_64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: system packages
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q musl-tools libzstd-dev
+          else
+            brew install zstd
+          fi
+
+      # Bun's pinned nightly (vendor/bun/rust-toolchain.toml, recorded in upstream.json).
+      - name: rust toolchain
+        run: |
+          toolchain=$(node -p "require('./upstream.json').rust_toolchain")
+          rustup toolchain install "$toolchain" --profile minimal --target ${{ matrix.target }}
+          echo "TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ hashFiles('capi/Cargo.lock') }}
+
+      - name: build
+        env:
+          CC: ${{ matrix.cc }}
+          CFLAGS: ${{ matrix.cflags }}
+          LDFLAGS: ${{ runner.os == 'macOS' && '-L/opt/homebrew/lib' || '' }}
+        run: |
+          node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} ${{ matrix.test && '--test' || '' }}
+
+      # Plain ustar, no macOS metadata files: lo's lib/untar.js reads ustar headers only (no pax records). One top
+      # directory, ts-sema-<target>/: lo's untar recreates (empties) an existing first directory, so never "./".
+      - name: package
+        env:
+          COPYFILE_DISABLE: 1
+        run: |
+          mkdir -p package && cp -R dist package/ts-sema-${{ matrix.target }}
+          tar --format=ustar -czf ts-sema-${{ matrix.target }}.tar.gz -C package ts-sema-${{ matrix.target }}
+          cat dist/build.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ts-sema-${{ matrix.target }}
+          path: ts-sema-${{ matrix.target }}.tar.gz
+          if-no-files-found: error

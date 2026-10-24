@@ -1,0 +1,15 @@
+#![allow(non_snake_case)]
+#![warn(unused_must_use)]
+pub mod NodeLinker;
+pub mod resolver_hooks;
+
+pub use resolver_hooks::{
+    Architecture, AutoInstaller, Behavior, Dependency, DependencyGroup, DependencyID,
+    DependencySlice, DependencyVersion, DependencyVersionTag, DependencyVersionValue,
+    EnqueueResult, ExternalPackageNameHashList, ExternalSlice, ExternalStringList,
+    ExternalStringMap, Features, INVALID_DEPENDENCY_ID, INVALID_PACKAGE_ID, Libc, Negatable,
+    NegatableEnum, NegatableExt, NpmInfo, OperatingSystem, PackageID, PackageNameHash,
+    PreinstallState, Repository, Resolution, ResolutionSlice, ResolutionTag, ResolutionValue,
+    TagInfo, TarballInfo, TruncatedPackageNameHash, URI, VersionSlice, VersionedURL,
+    VersionedURLType, WakeHandler, WakeTarget,
+};

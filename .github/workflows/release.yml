@@ -1,0 +1,44 @@
+name: build, attest and upload release assets
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write          # upload the release assets
+      id-token: write          # OIDC token for the Sigstore signing certificate
+      attestations: write      # store the attestations
+      artifact-metadata: write # the artifact storage records
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ts-sema-*
+          merge-multiple: true
+
+      - name: checksums
+        run: |
+          sha256sum ts-sema-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # SLSA build provenance for every asset, signed with this run's identity. Verify a download with
+      #   gh attestation verify ts-sema-<target>.tar.gz -R just-js/ts-sema
+      - uses: actions/attest@v4
+        with:
+          subject-path: 'ts-sema-*.tar.gz, SHA256SUMS'
+
+      - name: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" ts-sema-*.tar.gz SHA256SUMS --clobber

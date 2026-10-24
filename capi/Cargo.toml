@@ -1,0 +1,33 @@
+# A C ABI for Bun's TypeScript checker (bun_sema): check a TypeScript project and get a JSON report.
+# Its own workspace, outside Bun's: path deps into the vendored Bun sources in ../vendor/bun (sync.js), which still supply
+# their `workspace = true` fields. Cargo.lock is seeded from Bun's, so versions match upstream.
+[workspace]
+
+[package]
+name = "ts_sema"
+version = "0.0.0"
+edition = "2024"
+
+# staticlib to link into a lo runtime as a binding, cdylib for dlopen + lib/ffi.js.
+[lib]
+path = "lib.rs"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+bun_sema_driver = { path = "../vendor/bun/src/sema/driver" }
+bun_zstd = { path = "../vendor/bun/src/zstd" }
+bun_alloc = { path = "../vendor/bun/src/bun_alloc" }
+# The stand-ins for the native symbols Bun's C/C++ side provides (mimalloc, simdutf, ...), as in `bun-sema`.
+bun_sema_standalone = { path = "../vendor/bun/src/sema/standalone" }
+
+# Bun's [profile.release] (profiles only apply from the workspace root).
+[profile.release]
+lto = "off"
+codegen-units = 1
+debug = "line-tables-only"
+strip = "none"
+panic = "abort"
+
+# build.js --variant mimalloc sets it (RUSTFLAGS --cfg bun_sema_mimalloc).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bun_sema_mimalloc)'] }
