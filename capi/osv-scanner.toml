@@ -1,0 +1,13 @@
+# OSV-Scanner (and OpenSSF Scorecard's Vulnerabilities check, which runs it) on capi/Cargo.lock: advisories reviewed
+# as not affecting what ts-sema builds. Review again when sync.js updates the lock.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0309"
+reason = """Not this crate: the advisory is for the crates.io crate bun_collections (github.com/putao520/bao).
+Ours is Bun's own path crate bun_collections 0.0.0 (vendor/bun/src/collections, no crates.io source), which OSV
+matches by name only."""
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = """paste is unmaintained (no vulnerability). It is a proc-macro that runs only at compile time and is not
+part of the built library; Bun's crates use it, and it goes when Bun moves off it."""

@@ -18,7 +18,7 @@ The Bun commit, its TypeScript version and the rest of the pins are in
 | path | what |
 | --- | --- |
 | `capi/` | our crate `ts_sema` (`staticlib`): its own cargo workspace, with path deps into `vendor/bun`. `include/ts_sema.h` is the header |
-| `vendor/bun/` | the Bun sources the build needs, unmodified: the crates `capi` depends on (`upstream.json` `crates`), Bun's root `Cargo.toml`/`Cargo.lock`/`rust-toolchain.toml`, `LICENSE.md`, and the TypeScript `lib.*.d.ts` bundle (`src/runtime/cli/typescript_libs.bin`) |
+| `vendor/bun/` | the Bun sources the build needs, unmodified: the crates `capi` depends on (`upstream.json` `crates`), Bun's root `Cargo.toml`/`rust-toolchain.toml` (not its `Cargo.lock`: `capi/Cargo.lock` is ours, pruned from it), `LICENSE.md`, and the TypeScript `lib.*.d.ts` bundle (`src/runtime/cli/typescript_libs.bin`) |
 | `vendor/mimalloc/` | `src/`, `include/` and `LICENSE` of Bun's mimalloc fork (oven-sh/mimalloc), at the commit Bun pins |
 | `codegen/` | the three files the crates `include!` (`BUN_CODEGEN_DIR`), made by Bun's own generators |
 | `patches/` | our patches to the vendored sources, applied by `sync.js` (none yet) |
@@ -34,6 +34,9 @@ The Bun commit, its TypeScript version and the rest of the pins are in
 | `libs.js` | writes a set of built-in lib files (plus what they reference) to a directory; `--list` |
 | `test/` | `check.c` and `fixture/`, the smoke test (`node build.js --test`) |
 | `.github/workflows/` | CI builds and the release assets (see Releases), CodeQL, OpenSSF Scorecard; `.github/codeql/` is CodeQL's config, `.github/dependabot.yml` keeps the actions current |
+| `.github/npm/` | the release tools (npm, publint, attw) pinned by hash in `package-lock.json`; `release.yml` installs them with `npm ci --prefix .github/npm`, `npm.js` uses them when installed |
+| `capi/osv-scanner.toml` | advisories in `capi/Cargo.lock` reviewed as not affecting the build, with reasons (OSV-Scanner, Scorecard) |
+| `.github/rulesets/` | the repository's rulesets as GitHub exports them (`default.json`: `main`, `tags.json`: all tags); Settings → Rules → Rulesets → New ruleset → Import a ruleset. Keep them in sync with the live ones |
 
 `work/`, `target/` and `dist/` are not tracked.
 
@@ -102,9 +105,10 @@ push to `main` and every PR; `release.yml` runs on a release tag (see Releasing)
 attaches to the release, for `x86_64`/`aarch64` Linux (gnu and musl) and macOS:
 
 - `ts-sema-<target>.tar.gz`: one directory, `ts-sema-<target>/`, with `dist/`'s files: the static library, the
-  shared library and `ts_sema.node` (both without debug info, symbols kept), the header, `build.json`, `sbom.cdx.json`
-- `ts-sema-<target>-debug.tar.gz`: the debug info split off the shared library and the addon (Linux:
-  `<file>.debug`, macOS: `<file>.dSYM`; none for Intel macOS, which has neither)
+  shared library and `ts_sema.node` (all three without debug info, symbols kept), the header, `build.json`, `sbom.cdx.json`
+- `ts-sema-<target>-debug.tar.gz`: the debug info (line tables) split off them: `libts_sema.a` as built, to link
+  with line tables in your own binary, and for the shared library and the addon `<file>.debug` (Linux) or
+  `<file>.dSYM` (macOS; Intel macOS has only the archive)
 - `ts-sema-<target>.cdx.json`: the SBOM (CycloneDX 1.6, `sbom.js`): the crates compiled in, with licenses and
   checksums, Bun, typescript-go, mimalloc, the Rust standard library, and the static libzstd/libunwind in the addon
 
@@ -149,9 +153,11 @@ The tag push starts [release.yml](.github/workflows/release.yml):
 Nothing is public on npm until you approve each staged version with 2FA, platform packages first, the main one last:
 
 ```sh
-npm stage list @beardsoft/ts-sema-linux-x64      # the stage id of the new version (likewise for the others)
-npm stage approve <stage-id>                     # or approve on npmjs.com
+npm ci --prefix .github/npm        # once: the pinned release tools (npm 11.21.1, for npm stage)
+node npm.js 0.0.3 --approve        # npm stage list + npm stage approve for each, in order; npm asks for the 2FA code
 ```
+
+(or one by one: `npm stage list <package> --json`, `npm stage approve <stage-id>`, or on npmjs.com).
 
 Then check it all from outside, as a user would:
 
@@ -282,11 +288,13 @@ vulnerability reporting).
 - Each target has a **CycloneDX 1.6 SBOM** (`ts-sema-<target>.cdx.json`, also `sbom.cdx.json` in the package):
   the crates compiled in with their licenses and `Cargo.lock` checksums, Bun at its commit, typescript-go,
   mimalloc, the Rust standard library and the static libraries in the addon, with versions.
-- The **debug info** is split off the shared library and the addon into its own attested asset, so the shipped
+- The **debug info** is split off the static archive, the shared library and the addon into its own attested asset, so the shipped
   binaries are smaller and a crash in a release build can still be debugged offline (see Releases).
 - **Pinned inputs**: Bun's sources are vendored unmodified at a recorded commit (`upstream.json`), crates.io
   dependencies are locked with checksums (`capi/Cargo.lock`, `cargo build --locked`), the Rust toolchain is Bun's
-  pinned nightly, and every GitHub Action is pinned by commit SHA (Dependabot proposes updates weekly).
+  pinned nightly, every GitHub Action is pinned by commit SHA, and the release tools (npm, publint, attw) are pinned
+  by hash (`.github/npm/package-lock.json`, `npm ci`). Dependabot proposes updates for actions and tools weekly.
+  Advisories that don't affect the build are recorded with their reasons in `capi/osv-scanner.toml`.
 - **Least privilege in CI**: workflows default to read-only tokens; only the release jobs that need it get
   `contents: write`, `id-token: write` or `attestations: write`; checkouts don't keep the token
   (`persist-credentials: false`).
@@ -297,7 +305,8 @@ vulnerability reporting).
   token exists anywhere, and npm checks the workflow's OIDC identity. Direct publishing from CI is disabled; a
   maintainer approves every version with **2FA** before it becomes public.
 - Each package version has an **npm provenance attestation** linking it to this repository, the commit and the
-  workflow run. The packages have **no install scripts** and no dependencies besides their own platform packages.
+  workflow run, and an **SBOM** (`sbom.cdx.json`): a platform package its target's release SBOM, the main package
+  its platform packages and the release tools that made it (from the tools' lockfile, marked build-time only). The packages have **no install scripts** and no dependencies besides their own platform packages.
 
 **Analysis**
 - **CodeQL** scans the Node scripts, the C, the Rust in `capi/` and the workflows on every push, pull request and

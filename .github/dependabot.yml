@@ -1,4 +1,4 @@
-# GitHub Actions only. Cargo stays out: the crate versions are Bun's (capi/Cargo.lock comes from Bun's lock via
+# GitHub Actions and the release tools. Cargo stays out: the crate versions are Bun's (capi/Cargo.lock comes from Bun's lock via
 # sync.js), so they move when we re-vendor a Bun commit, not one by one.
 version: 2
 updates:
@@ -8,6 +8,16 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci
+  # The release tools (npm, publint, attw) release.yml installs with npm ci.
+  - package-ecosystem: npm
+    directory: /.github/npm
+    schedule:
+      interval: weekly
+    groups:
+      release-tools:
         patterns: ['*']
     commit-message:
       prefix: ci

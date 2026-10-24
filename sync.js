@@ -21,8 +21,10 @@ const vendorMimalloc = join(root, 'vendor', 'mimalloc')
 const codegen = join(root, 'codegen')
 
 // Files outside the crate directories that the build needs or that capi/ copies (capi/libs.rs is a copy of
-// typescript_libs.rs, so a change there needs a look).
-const BUN_FILES = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'LICENSE.md', 'package.json',
+// typescript_libs.rs, so a change there needs a look). Not Bun's Cargo.lock: capi/ is its own workspace with its own
+// lock (step 2 seeds it from work/bun's), and vulnerability scanners (OSV, Scorecard) would report the ~300 crates of
+// Bun's lock that we never build.
+const BUN_FILES = ['Cargo.toml', 'rust-toolchain.toml', 'LICENSE.md', 'package.json',
   'src/runtime/cli/typescript_libs.bin', 'src/runtime/cli/typescript_libs.rs']
 const MIMALLOC_PATHS = ['LICENSE', 'include', 'src']
 // The parts of Bun that capi/ calls into: a change here means capi/ may need updating.

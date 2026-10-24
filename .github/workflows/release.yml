@@ -103,10 +103,12 @@ jobs:
         with:
           node-version: 24
 
-      - name: npm 11.15.0+
+      # npm (11.15.0+ for staged publishing), publint and attw, pinned by hash in .github/npm/package-lock.json;
+      # npm.js uses them from .github/npm/node_modules.
+      - name: release tools
         run: |
-          npm install -g npm@latest
-          npm --version
+          npm ci --prefix .github/npm --ignore-scripts --no-audit --no-fund
+          .github/npm/node_modules/.bin/npm --version
 
       # publint + attw on the packages first (npm.js --lint): any finding stops the job before anything is staged.
       - name: stage

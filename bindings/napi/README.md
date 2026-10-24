@@ -138,9 +138,10 @@ Diagnostics are those of `bun check` at that Bun version (a port of typescript-g
 - **Immutable releases**: the GitHub release a version is made from is published only with all its assets and
   can't be changed afterwards (from 0.0.3); the release workflow verifies it before staging anything on npm.
 - **Human approval**: CI can only stage a version; a maintainer approves each one with 2FA before it is public.
-- **SBOM**: each release has a CycloneDX SBOM per platform (`ts-sema-<target>.cdx.json` on the
-  [GitHub release](https://github.com/just-js/ts-sema/releases)): every crate compiled in, with licenses and
-  checksums, and the bundled C libraries.
+- **SBOM**: every package carries `sbom.cdx.json` (CycloneDX 1.6, from 0.0.3): a platform package lists every crate
+  compiled into its `ts_sema.node`, with licenses and checksums, and the bundled C libraries (the same file as
+  `ts-sema-<target>.cdx.json` on the [GitHub release](https://github.com/just-js/ts-sema/releases)); this package
+  lists its platform packages and the tools that built and published it, pinned by hash.
 - **Debug symbols**: the addon ships without debug info (function names kept); the split-off debug files are a
   release asset of their own (`ts-sema-<target>-debug.tar.gz`) for debugging a crash offline.
 - **Scanned**: CodeQL and OpenSSF Scorecard run on the repository; vulnerabilities can be reported privately

@@ -1,3 +1,6 @@
 /target/
 /dist/
 /work/
+
+# The release tools (npm ci --prefix .github/npm)
+node_modules/

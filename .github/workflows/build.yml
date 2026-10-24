@@ -104,9 +104,9 @@ jobs:
 
       # Plain ustar, no macOS metadata files: lo's lib/untar.js reads ustar headers only (no pax records). One top
       # directory, ts-sema-<target>/: lo's untar recreates (empties) an existing first directory, so never "./".
-      # dist/debug/ (the split-off debug info) becomes its own asset, ts-sema-<target>-debug.tar.gz, and the SBOM is
-      # also an asset of its own, ts-sema-<target>.cdx.json (Intel macOS has neither shared library nor addon, so no
-      # debug asset).
+      # dist/debug/ (the split-off debug info: the archive as built, <file>.debug or <file>.dSYM for the shared library
+      # and the addon) becomes its own asset, ts-sema-<target>-debug.tar.gz, and the SBOM is also an asset of its own,
+      # ts-sema-<target>.cdx.json.
       - name: package
         env:
           COPYFILE_DISABLE: 1

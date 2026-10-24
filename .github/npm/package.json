@@ -1,0 +1,11 @@
+{
+  "name": "ts-sema-release-tools",
+  "private": true,
+  "description": "The tools release.yml's npm job installs with npm ci (pinned by hash in package-lock.json): npm itself (staged publishing needs 11.15.0+), and the linters npm.js --lint runs. Dependabot keeps them current.",
+  "license": "MIT",
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "npm": "11.21.1",
+    "publint": "0.3.25"
+  }
+}

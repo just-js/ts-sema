@@ -4,9 +4,9 @@
 //   build.json     what was built: variant, target, RUSTFLAGS, the Bun commit, rustc's version, link flags
 //   libts_sema.so  with --shared (libts_sema.dylib on macOS): exports only the C ABI, for dlopen / any FFI
 //   ts_sema.node   with --napi: the N-API addon (bindings/napi) for Node, Bun and Deno
-//   debug/         the debug info split off the shared library and the addon, which are shipped stripped of it
-//                  (symbols kept): <file>.debug (Linux, found through the binary's gnu-debuglink or build-id) or
-//                  <file>.dSYM (macOS)
+//   debug/         the debug info split off the archive, the shared library and the addon, which are shipped
+//                  without it (symbols kept): libts_sema.a as built, <file>.debug (Linux, found through the binary's
+//                  gnu-debuglink or build-id) or <file>.dSYM (macOS)
 //   sbom.cdx.json  the CycloneDX SBOM of what dist/ contains (sbom.js)
 //
 //   node build.js [--variant mimalloc|plain] [--target <triple>] [--toolchain <rustup toolchain>] [--jobs <n>]
@@ -194,7 +194,7 @@ const link = [darwin ? '-Wl,-dead_strip' : '-Wl,--gc-sections', '-lzstd', ...nat
 // crash in a release build maps to file:line with the debug asset. The shared library and the addon ship without
 // it; it goes to dist/debug/ (a release asset of its own). Linux: objcopy --only-keep-debug, then --strip-debug with a gnu-debuglink to it (gdb also finds it by build-id, as
 // /usr/lib/debug/.build-id/xx/rest.debug); macOS: dsymutil, then strip -S. Both keep the symbol table, so backtraces
-// and profilers still show function names without the debug files. The static archive is left as it is.
+// and profilers still show function names without the debug files. The static archive is split last (below).
 const debugDir = join(dist, 'debug')
 const debugIds = {}
 function splitDebug (file) {
@@ -322,6 +322,16 @@ if (flag('--napi')) {
     if (path && link.includes(lib)) linkedStatic[lib.slice(2)] = { path, ...ownerPackage(path) }
   }
 }
+
+// The static archive too: dist/libts_sema.a without debug info (symbols kept), the archive as built in
+// dist/debug/libts_sema.a, for an embedder that wants line tables in its own binaries. Only now, after every link
+// (and dsymutil) above used the archive with its debug info; the tests below link the stripped one, as shipped.
+mkdirSync(debugDir, { recursive: true })
+copyFileSync(archive, join(debugDir, 'libts_sema.a'))
+if (darwin) run('strip', ['-S', archive])
+else run(OBJCOPY, ['--strip-debug', archive])
+run(AR, ['s', archive])
+log('libts_sema.a: debug info split off (dist/debug/libts_sema.a keeps it)')
 
 const upstream = JSON.parse(readFileSync(join(root, 'upstream.json'), 'utf8'))
 const info = {
