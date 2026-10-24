@@ -8,10 +8,11 @@ name = "ts_sema"
 version = "0.0.0"
 edition = "2024"
 
-# staticlib to link into a lo runtime as a binding, cdylib for dlopen + lib/ffi.js.
+# staticlib only. A cdylib from cargo would lack mimalloc (build.js adds mimalloc.o to the archive after cargo), which
+# macOS's linker rejects; `build.js --shared` links the shared library (for dlopen + lib/ffi.js) from the full archive.
 [lib]
 path = "lib.rs"
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib"]
 
 [dependencies]
 bun_sema_driver = { path = "../vendor/bun/src/sema/driver" }

@@ -18,23 +18,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # musl targets are cross-built on Ubuntu (Rust's musl target, musl-gcc for mimalloc): JavaScript actions
-          # don't run in Alpine containers on arm64. The smoke test links with the host's libzstd, so it runs where
-          # the target is the host's own.
+          # musl targets build natively in Alpine, with `docker run` for the build step only (as lo's musl jobs do):
+          # JavaScript actions (checkout, upload, attest) don't run inside Alpine containers on arm64. The smoke test
+          # links with the build host's libzstd, so it runs where the target is the host's own.
           - target: x86_64-unknown-linux-gnu
             runs-on: ubuntu-24.04
             cc: gcc
             test: true
           - target: x86_64-unknown-linux-musl
             runs-on: ubuntu-24.04
-            cc: musl-gcc
+            alpine: true
+            test: true
           - target: aarch64-unknown-linux-gnu
             runs-on: ubuntu-24.04-arm
             cc: gcc
             test: true
           - target: aarch64-unknown-linux-musl
             runs-on: ubuntu-24.04-arm
-            cc: musl-gcc
+            alpine: true
+            test: true
           - target: aarch64-apple-darwin
             runs-on: macos-15
             cc: clang
@@ -47,21 +49,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: system packages
-        run: |
-          if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q musl-tools libzstd-dev
-          else
-            brew install zstd
-          fi
-
       # Bun's pinned nightly (vendor/bun/rust-toolchain.toml, recorded in upstream.json).
       - name: rust toolchain
         run: |
-          toolchain=$(node -p "require('./upstream.json').rust_toolchain")
-          rustup toolchain install "$toolchain" --profile minimal --target ${{ matrix.target }}
-          echo "TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN=$(node -p "require('./upstream.json').rust_toolchain")" >> "$GITHUB_ENV"
+
+      - name: system packages and rust
+        if: ${{ !matrix.alpine }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q libzstd-dev
+          else
+            brew install zstd
+          fi
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
 
       - uses: actions/cache@v6
         with:
@@ -71,12 +73,26 @@ jobs:
           key: cargo-registry-${{ hashFiles('capi/Cargo.lock') }}
 
       - name: build
+        if: ${{ !matrix.alpine }}
         env:
           CC: ${{ matrix.cc }}
           CFLAGS: ${{ matrix.cflags }}
           LDFLAGS: ${{ runner.os == 'macOS' && '-L/opt/homebrew/lib' || '' }}
         run: |
           node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} ${{ matrix.test && '--test' || '' }}
+
+      # Alpine 3.23 (lo's musl image base): linux-headers for mimalloc, zstd-dev for the test, rustup for the nightly.
+      # The host's cargo registry is mounted, so actions/cache covers it too.
+      - name: build (Alpine)
+        if: ${{ matrix.alpine }}
+        run: |
+          mkdir -p ~/.cargo/registry
+          docker run --rm -e TOOLCHAIN -v "$PWD:/src" -v "$HOME/.cargo/registry:/root/.cargo/registry" -w /src \
+            alpine:3.23 sh -euc '
+              apk add --no-cache build-base linux-headers nodejs zstd-dev rustup
+              rustup-init -y -q --profile minimal --default-toolchain "$TOOLCHAIN"
+              . /root/.cargo/env
+              CC=gcc node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} --test'
 
       # Plain ustar, no macOS metadata files: lo's lib/untar.js reads ustar headers only (no pax records). One top
       # directory, ts-sema-<target>/: lo's untar recreates (empties) an existing first directory, so never "./".
