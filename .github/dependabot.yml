@@ -20,7 +20,7 @@ updates:
       prefix: test
   # The release tools (npm, publint, attw) release.yml installs with npm ci.
   - package-ecosystem: npm
-    directory: /.github/npm
+    directory: /release-tools
     schedule:
       interval: weekly
     groups:

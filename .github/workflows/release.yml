@@ -104,12 +104,12 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # npm (11.15.0+ for staged publishing), publint and attw, pinned by hash in .github/npm/package-lock.json;
-      # npm.js uses them from .github/npm/node_modules.
+      # npm (11.15.0+ for staged publishing), publint and attw, pinned by hash in release-tools/package-lock.json;
+      # npm.js uses them from release-tools/node_modules.
       - name: release tools
         run: |
-          npm ci --prefix .github/npm --ignore-scripts --no-audit --no-fund
-          .github/npm/node_modules/.bin/npm --version
+          npm ci --prefix release-tools --ignore-scripts --no-audit --no-fund
+          release-tools/node_modules/.bin/npm --version
 
       # npm.js writes the six packages to dist/npm/ from the verified release assets, and lints them (publint, attw):
       # any finding stops the job before anything is staged.
@@ -125,6 +125,6 @@ jobs:
         run: |
           for dir in $(node -p "require('./dist/npm/order.json').join(' ')"); do
             echo "npm stage publish dist/npm/$dir"
-            (cd "dist/npm/$dir" && "$GITHUB_WORKSPACE/.github/npm/node_modules/.bin/npm" stage publish \
+            (cd "dist/npm/$dir" && "$GITHUB_WORKSPACE/release-tools/node_modules/.bin/npm" stage publish \
               --access public --provenance --tag "$DIST_TAG")
           done

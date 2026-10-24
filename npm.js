@@ -15,10 +15,10 @@
 // last, so it never points at versions that aren't there; dist/npm/order.json records that order (release.yml runs
 // npm stage publish itself, in that order, after npm.js --lint). --lint first runs publint (--strict) on every package and
 // attw (--profile esm-only: the main package is ESM only) on the main one, and stops on any finding; both are run
-// from .github/npm/node_modules (`npm ci --prefix .github/npm`: npm, publint and attw pinned by hash in its
+// from release-tools/node_modules (`npm ci --prefix release-tools`: npm, publint and attw pinned by hash in its
 // package-lock.json, as release.yml does), else with npx at the same versions. Each package carries sbom.cdx.json:
 // a platform package its target's SBOM from the release (ts-sema-<target>.cdx.json), the main package one of its
-// platform packages and, as build-time only components, the release tools of .github/npm/package-lock.json.
+// platform packages and, as build-time only components, the release tools of release-tools/package-lock.json.
 // --approve lists the staged versions of <version> (npm stage list --json) and approves them in order; npm asks
 // for the 2FA code. Needs Node 20+, tar and, to publish or approve, an npm login with rights on @beardsoft. Intel macOS
 // has no addon build, so no package.
@@ -33,8 +33,8 @@ import process from 'node:process'
 const root = dirname(fileURLToPath(import.meta.url))
 const REPO = 'just-js/ts-sema'
 const SCOPE = '@beardsoft'
-// The release tools: .github/npm (npm ci) when installed, else npx at the versions its package.json pins.
-const TOOLS_DIR = join(root, '.github/npm')
+// The release tools: release-tools (npm ci) when installed, else npx at the versions its package.json pins.
+const TOOLS_DIR = join(root, 'release-tools')
 const toolVersions = JSON.parse(readFileSync(join(TOOLS_DIR, 'package.json'), 'utf8')).devDependencies
 function tool (bin, pkg, argv) {
   const local = join(TOOLS_DIR, 'node_modules/.bin', bin)
@@ -126,7 +126,7 @@ const common = {
   publishConfig: { access: 'public' }
 }
 // The main package's SBOM (CycloneDX 1.6): its platform packages (each carries its own SBOM of what ts_sema.node
-// contains), and the tools that made and published it, from .github/npm/package-lock.json with the lock's integrity
+// contains), and the tools that made and published it, from release-tools/package-lock.json with the lock's integrity
 // hashes, as scope "excluded" (build time only, not part of what is installed).
 function mainSbom (name, platforms) {
   // purl: each segment of the name percent-encoded (@scope/name -> %40scope/name)
@@ -154,7 +154,7 @@ function mainSbom (name, platforms) {
       type: 'library', 'bom-ref': ref, name: toolName, version: info.version, purl: ref, scope: 'excluded',
       ...(info.license ? { licenses: [{ expression: info.license }] } : {}),
       hashes: integrity(info.integrity),
-      properties: [{ name: 'ts-sema:role', value: 'release tool (.github/npm/package-lock.json)' },
+      properties: [{ name: 'ts-sema:role', value: 'release tool (release-tools/package-lock.json)' },
         ...(info.inBundle ? [{ name: 'ts-sema:bundled-in', value: 'npm' }] : [])]
     })
   }

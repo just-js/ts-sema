@@ -34,7 +34,7 @@ The Bun commit, its TypeScript version and the rest of the pins are in
 | `libs.js` | writes a set of built-in lib files (plus what they reference) to a directory; `--list` |
 | `test/` | `check.c` and `fixture/`, the smoke test (`node build.js --test`); `fuzz/`, property-based tests of our layer (see Testing) |
 | `.github/workflows/` | CI builds and the release assets (see Releases), CodeQL, OpenSSF Scorecard; `.github/codeql/` is CodeQL's config, `.github/dependabot.yml` keeps the actions current |
-| `.github/npm/` | the release tools (npm, publint, attw) pinned by hash in `package-lock.json`; `release.yml` installs them with `npm ci --prefix .github/npm`, `npm.js` uses them when installed |
+| `release-tools/` | the release tools (npm, publint, attw) pinned by hash in `package-lock.json`; `release.yml` installs them with `npm ci --prefix release-tools`, `npm.js` uses them when installed |
 | `capi/osv-scanner.toml` | advisories in `capi/Cargo.lock` reviewed as not affecting the build, with reasons (OSV-Scanner, Scorecard) |
 | `.github/rulesets/` | the repository's rulesets as GitHub exports them (`default.json`: `main`, `tags.json`: all tags); Settings → Rules → Rulesets → New ruleset → Import a ruleset. Keep them in sync with the live ones |
 
@@ -169,7 +169,7 @@ The tag push starts [release.yml](.github/workflows/release.yml):
 Nothing is public on npm until you approve each staged version with 2FA, platform packages first, the main one last:
 
 ```sh
-npm ci --prefix .github/npm        # once: the pinned release tools (npm 11.21.1, for npm stage)
+npm ci --prefix release-tools        # once: the pinned release tools (npm 11.21.1, for npm stage)
 node npm.js 0.0.3 --approve        # npm stage list + npm stage approve for each, in order; npm asks for the 2FA code
 ```
 
@@ -309,7 +309,7 @@ vulnerability reporting).
 - **Pinned inputs**: Bun's sources are vendored unmodified at a recorded commit (`upstream.json`), crates.io
   dependencies are locked with checksums (`capi/Cargo.lock`, `cargo build --locked`), the Rust toolchain is Bun's
   pinned nightly, every GitHub Action is pinned by commit SHA, and the release tools (npm, publint, attw) are pinned
-  by hash (`.github/npm/package-lock.json`, `npm ci`). Dependabot proposes updates for actions and tools weekly.
+  by hash (`release-tools/package-lock.json`, `npm ci`). Dependabot proposes updates for actions and tools weekly.
   Advisories that don't affect the build are recorded with their reasons in `capi/osv-scanner.toml`.
 - **Least privilege in CI**: workflows default to read-only tokens; only the release jobs that need it get
   `contents: write`, `id-token: write` or `attestations: write`; checkouts don't keep the token
