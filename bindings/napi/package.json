@@ -1,6 +1,6 @@
 {
   "name": "@beardsoft/ts-sema",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Bun's TypeScript type checker (bun check, a port of typescript-go) for Node and Bun, as an N-API addon; no node-gyp, no tsc",
   "keywords": [
     "typescript",
