@@ -70,7 +70,10 @@ interface Report {
 ```
 
 `check(project, options?)` and `checkSync(project, options?)` take `options.libDir` (a directory of `lib.*.d.ts` files
-to use instead of the built-in ones) and `options.threads`. Checks run one at a time within a process.
+to use instead of the built-in ones) and `options.threads` (a non-negative integer; 0 or unset: one per core; more
+than the core count counts as the core count). Arguments are validated, not coerced: a non-string project or `libDir`, or a path with a NUL character, is a
+`TypeError`; any other `threads` (negative, fractional, a string) is a `RangeError` (from 0.0.4: before, `threads: -1`
+aborted the process). Checks run one at a time within a process.
 
 ### Choosing the standards a project may use
 

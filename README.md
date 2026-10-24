@@ -32,7 +32,7 @@ The Bun commit, its TypeScript version and the rest of the pins are in
 | `sbom.js` | writes `dist/sbom.cdx.json`, the CycloneDX SBOM of a build (`build.js` runs it) |
 | `SECURITY.md` | reporting vulnerabilities, verifying releases |
 | `libs.js` | writes a set of built-in lib files (plus what they reference) to a directory; `--list` |
-| `test/` | `check.c` and `fixture/`, the smoke test (`node build.js --test`) |
+| `test/` | `check.c` and `fixture/`, the smoke test (`node build.js --test`); `fuzz/`, property-based tests of our layer (see Testing) |
 | `.github/workflows/` | CI builds and the release assets (see Releases), CodeQL, OpenSSF Scorecard; `.github/codeql/` is CodeQL's config, `.github/dependabot.yml` keeps the actions current |
 | `.github/npm/` | the release tools (npm, publint, attw) pinned by hash in `package-lock.json`; `release.yml` installs them with `npm ci --prefix .github/npm`, `npm.js` uses them when installed |
 | `capi/osv-scanner.toml` | advisories in `capi/Cargo.lock` reviewed as not affecting the build, with reasons (OSV-Scanner, Scorecard) |
@@ -57,6 +57,22 @@ The Bun commit, its TypeScript version and the rest of the pins are in
   from code the checker never reaches. Rust links its own binaries that way.
 
 No git or Bun is needed to build. `sync.js` needs git, cargo and Node 22.18+.
+
+## Testing
+
+- `node build.js --test`: the smoke test. `test/check.c` links the static library and checks `test/fixture` (one
+  TS2322); with `--shared` also through `dlopen`, with `--napi` also the addon (`bindings/napi/test.mjs`).
+- `test/fuzz/`: property-based tests ([fast-check](https://fast-check.dev), pinned by hash in its lockfile) of
+  ts-sema's own layer, not of Bun's checker: argument validation in `index.js` and the addon, the report JSON
+  (escaping of any diagnostic text and file name, error counts), the C ABI's thread cap, `check` and `checkSync`
+  agreeing (also concurrently), `builtinLib` and `setLibs`. Each case runs in a child process, so an abort in native
+  code fails that case and fast-check shrinks it to a minimal input. CI runs it after every build with an addon.
+
+```sh
+npm ci --prefix test/fuzz
+TS_SEMA_NODE=dist/ts_sema.node node --test test/fuzz/properties.test.js
+FUZZ_RUNS=200 FUZZ_SEED=<seed> ...    # more runs; replay a failure with the seed fast-check printed
+```
 
 ## Building
 
@@ -311,6 +327,8 @@ vulnerability reporting).
 **Analysis**
 - **CodeQL** scans the Node scripts, the C, the Rust in `capi/` and the workflows on every push, pull request and
   weekly (`.github/workflows/codeql.yml`; vendored code excluded). Results are in the Security tab.
+- **Property-based tests** (fast-check, `test/fuzz/`) of our layer run after every CI build: argument validation, the
+  report JSON, the thread cap, sync/async agreement, lib registration (see Testing).
 - **OpenSSF Scorecard** runs weekly and on every push to `main` (`.github/workflows/scorecard.yml`) and publishes
   its results.
 

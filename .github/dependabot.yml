@@ -11,6 +11,13 @@ updates:
         patterns: ['*']
     commit-message:
       prefix: ci
+  # The property tests' fast-check (test/fuzz).
+  - package-ecosystem: npm
+    directory: /test/fuzz
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: test
   # The release tools (npm, publint, attw) release.yml installs with npm ci.
   - package-ecosystem: npm
     directory: /.github/npm

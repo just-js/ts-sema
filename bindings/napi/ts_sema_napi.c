@@ -69,7 +69,10 @@ static void args_free(args_t *a) {
   free(a->lib_dir);
 }
 
-static char *string_arg(napi_env env, napi_value value, int required) {
+// A JS string as an owned UTF-8 C string (its byte length in *out_len when given). required: throw a TypeError for a
+// non-string, else return NULL for one (and for ""). no_nul: throw a TypeError for a string with a NUL character
+// (paths and lib names: C would see only the part before it; Node's fs rejects those too).
+static char *string_arg(napi_env env, napi_value value, int required, int no_nul, size_t *out_len) {
   napi_valuetype type;
   if (napi_typeof(env, value, &type) != napi_ok) return NULL;
   if (type != napi_string) {
@@ -80,8 +83,17 @@ static char *string_arg(napi_env env, napi_value value, int required) {
   if (napi_get_value_string_utf8(env, value, NULL, 0, &len) != napi_ok) return NULL;
   if (len == 0 && !required) return NULL;
   char *s = malloc(len + 1);
-  if (!s) return NULL;
+  if (!s) {
+    napi_throw_error(env, NULL, "out of memory");
+    return NULL;
+  }
   napi_get_value_string_utf8(env, value, s, len + 1, &len);
+  if (no_nul && strlen(s) != len) {
+    free(s);
+    napi_throw_type_error(env, NULL, "expected a string without NUL characters");
+    return NULL;
+  }
+  if (out_len) *out_len = len;
   return s;
 }
 
@@ -94,9 +106,14 @@ static int read_args(napi_env env, napi_callback_info info, args_t *a) {
     napi_throw_type_error(env, NULL, "check(project, libDir, threads): project is required");
     return 0;
   }
-  a->project = string_arg(env, argv[0], 1);
+  a->project = string_arg(env, argv[0], 1, 1, NULL);
   if (!a->project) return 0;
-  if (argc > 1) a->lib_dir = string_arg(env, argv[1], 0);
+  if (argc > 1) {
+    a->lib_dir = string_arg(env, argv[1], 0, 1, NULL);
+    bool pending = false;
+    napi_is_exception_pending(env, &pending);
+    if (pending) return 0;
+  }
   if (argc > 2) {
     napi_valuetype type;
     napi_typeof(env, argv[2], &type);
@@ -202,8 +219,9 @@ static napi_value set_libs(napi_env env, napi_callback_info info) {
   for (uint32_t i = 0; ok && i < count; i++) {
     napi_value name, text;
     ok = napi_get_element(env, argv[0], i, &name) == napi_ok && napi_get_element(env, argv[1], i, &text) == napi_ok;
-    char *n = ok ? string_arg(env, name, 1) : NULL;
-    char *t = ok ? string_arg(env, text, 1) : NULL;
+    size_t text_len = 0;
+    char *n = ok ? string_arg(env, name, 1, 1, NULL) : NULL;
+    char *t = n ? string_arg(env, text, 1, 0, &text_len) : NULL;
     if (!n || !t) {
       free(n);
       free(t);
@@ -212,7 +230,7 @@ static napi_value set_libs(napi_env env, napi_callback_info info) {
     }
     names[i] = n;
     texts[i] = t;
-    lens[i] = strlen(t);
+    lens[i] = text_len;
   }
   int result = ok ? bun_sema_set_libs(names, texts, lens, count) : -2;
   if (result != 0) {
@@ -240,7 +258,10 @@ static napi_value builtin_lib(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
   CALL(env, napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  char *name = argc > 0 ? string_arg(env, argv[0], 0) : NULL;
+  char *name = argc > 0 ? string_arg(env, argv[0], 0, 1, NULL) : NULL;
+  bool pending = false;
+  napi_is_exception_pending(env, &pending);
+  if (pending) return NULL;
   size_t len = 0;
   char *text = bun_sema_builtin_lib(name, &len);
   free(name);

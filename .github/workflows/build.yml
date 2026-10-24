@@ -87,6 +87,16 @@ jobs:
         run: |
           node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} ${{ !matrix.no-shared && '--shared --napi' || '' }} ${{ matrix.test && '--test' || '' }}
 
+      # The property tests of our layer (test/fuzz, fast-check pinned by hash in its package-lock.json), against the
+      # addon just built. Not on Intel macOS, which has no addon.
+      - name: property tests
+        if: ${{ !matrix.alpine && !matrix.no-shared }}
+        env:
+          TS_SEMA_NODE: ${{ github.workspace }}/dist/ts_sema.node
+        run: |
+          npm ci --prefix test/fuzz --ignore-scripts --no-audit --no-fund
+          node --test test/fuzz/properties.test.js
+
       # Alpine 3.23 (lo's musl image base): linux-headers for mimalloc; zstd-dev and llvm-libunwind-dev for the test
       # (rustc's native-static-libs for the musl target are -lunwind -lc: LLVM's libunwind); their -static packages so
       # ts_sema.node links them in and needs nothing installed; rustup for the nightly.
@@ -97,10 +107,12 @@ jobs:
           mkdir -p ~/.cargo/registry
           docker run --rm -e TOOLCHAIN -e SOURCE_DATE_EPOCH -v "$PWD:/src" -v "$HOME/.cargo/registry:/root/.cargo/registry" -w /src \
             alpine:3.23 sh -euc '
-              apk add --no-cache build-base linux-headers nodejs zstd-dev zstd-static llvm-libunwind-dev llvm-libunwind-static rustup
+              apk add --no-cache build-base linux-headers nodejs npm zstd-dev zstd-static llvm-libunwind-dev llvm-libunwind-static rustup
               rustup-init -y -q --profile minimal --default-toolchain "$TOOLCHAIN"
               . /root/.cargo/env
-              CC=gcc node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} --shared --napi --test'
+              CC=gcc node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} --shared --napi --test
+              npm ci --prefix test/fuzz --ignore-scripts --no-audit --no-fund
+              TS_SEMA_NODE=/src/dist/ts_sema.node node --test test/fuzz/properties.test.js'
 
       # Plain ustar, no macOS metadata files: lo's lib/untar.js reads ustar headers only (no pax records). One top
       # directory, ts-sema-<target>/: lo's untar recreates (empties) an existing first directory, so never "./".

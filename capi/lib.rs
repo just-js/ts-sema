@@ -3,8 +3,9 @@
 //! ```c
 //! // Checks the project at `project` (a tsconfig.json or its directory), with the lib.*.d.ts files in
 //! // `ts_lib_dir` (NULL or "": TypeScript 7.0.2's, built in like `bun check`'s), on `threads` threads
-//! // (0: one per core). Returns a NUL-terminated JSON report and stores its
-//! // length (without the NUL) in *len. Free it with bun_sema_free.
+//! // (0: one per core; more than the core count counts as the core count).
+//! // Returns a NUL-terminated JSON report and stores its length (without the NUL) in *len. Free it with
+//! // bun_sema_free.
 //! char *bun_sema_check(const char *project, const char *ts_lib_dir, uint32_t threads, size_t *len);
 //! void bun_sema_free(char *report);
 //! // Replaces the built-in lib files with `count` borrowed ones for the rest of the process (before the first check).
@@ -127,6 +128,10 @@ pub unsafe extern "C" fn bun_sema_check(
         .then(|| unsafe { CStr::from_ptr(ts_lib_dir) }.to_bytes())
         .filter(|dir| !dir.is_empty());
     libs::CHECKED.store(true, std::sync::atomic::Ordering::SeqCst);
+    // At most one thread per core: Bun's pool has no more, and the driver sizes per-thread state by this number (a JS
+    // caller's -1 >>> 0, 4294967295, made it allocate 12 GB and abort the process). 0 still means one per core.
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = threads.min(u32::try_from(cores).unwrap_or(u32::MAX));
     let json = check(project.to_bytes(), ts_lib_dir, threads);
     if !len.is_null() {
         // SAFETY: a non-null `len` points to a `size_t` (this function's contract).

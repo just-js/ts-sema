@@ -42,9 +42,23 @@ function locate () {
 export const libraryPath = locate()
 const addon = require(libraryPath)
 
-function args (project, options = {}) {
-  if (typeof project !== 'string') throw new TypeError('ts-sema: project must be a string')
-  return [project, options.libDir || '', options.threads >>> 0]
+// Validated, not coerced: `threads >>> 0` once turned -1 into 4294967295, and the checker aborted the process.
+function path (value, what) {
+  if (typeof value !== 'string') throw new TypeError(`ts-sema: ${what} must be a string`)
+  if (value.includes('\0')) throw new TypeError(`ts-sema: ${what} must not contain NUL characters`)
+  return value
+}
+
+function args (project, options) {
+  if (options == null) options = {}
+  if (typeof options !== 'object') throw new TypeError('ts-sema: options must be an object')
+  const { libDir, threads } = options
+  if (threads != null && !(Number.isSafeInteger(threads) && threads >= 0)) {
+    throw new RangeError('ts-sema: threads must be a non-negative integer (0: one per core)')
+  }
+  // More threads than cores count as the core count (the C ABI caps them).
+  return [path(project, 'project'), libDir == null || libDir === '' ? '' : path(libDir, 'libDir'),
+    Math.min(threads ?? 0, 0xffffffff)]
 }
 
 /** Checks a project on a worker thread. */
@@ -63,7 +77,12 @@ export function checkSync (project, options) {
  * reference (`/// <reference lib="..." />`); builtinLibSet() makes such a set.
  */
 export function setLibs (libs) {
+  if (libs === null || typeof libs !== 'object') throw new TypeError('ts-sema: setLibs takes { name: text }')
   const names = Object.keys(libs)
+  for (const name of names) {
+    path(name, 'a lib name')
+    if (typeof libs[name] !== 'string') throw new TypeError(`ts-sema: lib ${name} must be a string`)
+  }
   addon.setLibs(names, names.map(name => libs[name]))
 }
 
@@ -78,6 +97,7 @@ export function builtinLib (name) {
 }
 
 function libFile (name) {
+  path(name, 'a lib name')
   return name.startsWith('lib.') ? name : `lib.${name.toLowerCase()}.d.ts`
 }
 

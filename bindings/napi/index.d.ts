@@ -1,7 +1,7 @@
 export interface CheckOptions {
   /** A directory of TypeScript lib.*.d.ts files; default: the built-in ones (the TypeScript version ts-sema was built with). */
   libDir?: string
-  /** Checker threads; 0 or unset: one per core. */
+  /** Checker threads: a non-negative integer (else a RangeError); 0 or unset: one per core; more than the cores count as the core count. */
   threads?: number
 }
 

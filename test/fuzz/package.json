@@ -1,0 +1,10 @@
+{
+  "name": "ts-sema-fuzz",
+  "private": true,
+  "description": "Property-based tests (fast-check) of ts-sema's own layer: the N-API addon, bindings/napi/index.js and the capi C ABI with its hand-off to Bun's checker. Run: npm ci --prefix test/fuzz && node --test test/fuzz/properties.test.js",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "fast-check": "4.10.2"
+  }
+}
