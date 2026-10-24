@@ -2,7 +2,9 @@ name: build on push
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'LICENSE']
+    # bindings/napi/package.json: release.js's "chore: release <version>" commit changes only that file, and the
+    # release build (release.yml, started by the tag) builds it; a later commit's push build covers it anyway.
+    paths-ignore: ['**.md', 'LICENSE', 'bindings/napi/package.json']
   pull_request:
     paths-ignore: ['**.md', 'LICENSE']
 

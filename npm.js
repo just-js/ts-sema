@@ -2,7 +2,7 @@
 //   @beardsoft/ts-sema                      index.js, index.d.ts (bindings/napi), optionalDependencies on:
 //   @beardsoft/ts-sema-<os>-<arch>[-musl]   one ts_sema.node each, selected by npm/bun through os/cpu/libc
 //
-//   node npm.js <version> [--dry-run | --stage | --publish] [--tag <dist-tag>] [--from <dir>]
+//   node npm.js <version> [--lint] [--dry-run | --stage | --publish] [--tag <dist-tag>] [--from <dir>]
 //
 // Downloads ts-sema-<target>.tar.gz of release <version> and checks it against the release's SHA256SUMS (--from:
 // a directory with those files instead), unpacks ts_sema.node from each, and writes the packages to dist/npm/.
@@ -10,9 +10,11 @@
 // a maintainer approves it with 2FA (npmjs.com, or `npm stage list` / `npm stage approve <id>`; npm 11.15.0+); the
 // release workflow stages, because direct publishing from CI is off for these packages. --publish runs
 // `npm publish --access public` directly (by hand, with an npm login). In GitHub Actions both pass --provenance
-// (`npm stage publish` doesn't add it by itself). Either way the platform packages go first
-// first, the main package last, so it never points at versions that aren't there). Needs Node 20+, tar and, to
-// publish, an npm login with rights on @beardsoft. Intel macOS has no addon build, so no package.
+// (`npm stage publish` doesn't add it by itself). Either way the platform packages go first and the main package
+// last, so it never points at versions that aren't there. --lint first runs publint (--strict) on every package and
+// attw (--profile esm-only: the main package is ESM only) on the main one, and stops on any finding; both are run
+// with npx at the pinned versions below, so nothing is installed in the repo. Needs Node 20+, tar and, to publish,
+// an npm login with rights on @beardsoft. Intel macOS has no addon build, so no package.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -24,6 +26,9 @@ import process from 'node:process'
 const root = dirname(fileURLToPath(import.meta.url))
 const REPO = 'just-js/ts-sema'
 const SCOPE = '@beardsoft'
+// The linters --lint runs (npx, pinned).
+const PUBLINT = 'publint@0.3.25'
+const ATTW = '@arethetypeswrong/cli@0.18.5'
 // Rust target -> npm package suffix and the os/cpu/libc npm selects it by. Must match bindings/napi/index.js.
 const TARGETS = {
   'x86_64-unknown-linux-gnu': { suffix: 'linux-x64', os: 'linux', cpu: 'x64', libc: 'glibc' },
@@ -51,7 +56,7 @@ const opt = name => {
 const flag = name => args.includes(name)
 const version = args.find((a, i) => !a.startsWith('--') && !['--tag', '--from'].includes(args[i - 1]))
 if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) {
-  console.error('usage: node npm.js <version> [--dry-run | --stage | --publish] [--tag <dist-tag>] [--from <dir>]')
+  console.error('usage: node npm.js <version> [--lint] [--dry-run | --stage | --publish] [--tag <dist-tag>] [--from <dir>]')
   process.exit(2)
 }
 const log = s => console.log(`npm: ${s}`)
@@ -138,6 +143,16 @@ try {
   log(`${template.name}: ${packages.length - 1} platform packages`)
 } finally {
   rmSync(work, { recursive: true, force: true })
+}
+
+if (flag('--lint')) {
+  for (const { name, dir } of packages) {
+    log(`publint ${name}`)
+    run('npx', ['--yes', PUBLINT, 'run', '.', '--strict', '--pack', 'npm'], dir)
+  }
+  const main = packages[packages.length - 1]
+  log(`attw ${main.name}`)
+  run('npx', ['--yes', ATTW, '--pack', '.', '--profile', 'esm-only', '--no-definitely-typed'], main.dir)
 }
 
 const tag = opt('--tag')

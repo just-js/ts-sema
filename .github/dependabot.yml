@@ -1,0 +1,13 @@
+# GitHub Actions only. Cargo stays out: the crate versions are Bun's (capi/Cargo.lock comes from Bun's lock via
+# sync.js), so they move when we re-vendor a Bun commit, not one by one.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci

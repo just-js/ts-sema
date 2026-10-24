@@ -49,12 +49,16 @@ jobs:
             cflags: -arch x86_64
             no-shared: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Bun's pinned nightly (vendor/bun/rust-toolchain.toml, recorded in upstream.json).
+      # SOURCE_DATE_EPOCH: the commit's time, for the SBOM's timestamp (sbom.js; the Alpine container has no git).
       - name: rust toolchain
         run: |
           echo "TOOLCHAIN=$(node -p "require('./upstream.json').rust_toolchain")" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
       - name: system packages and rust
         if: ${{ !matrix.alpine }}
@@ -67,7 +71,7 @@ jobs:
           fi
           rustup toolchain install "$TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -91,7 +95,7 @@ jobs:
         if: ${{ matrix.alpine }}
         run: |
           mkdir -p ~/.cargo/registry
-          docker run --rm -e TOOLCHAIN -v "$PWD:/src" -v "$HOME/.cargo/registry:/root/.cargo/registry" -w /src \
+          docker run --rm -e TOOLCHAIN -e SOURCE_DATE_EPOCH -v "$PWD:/src" -v "$HOME/.cargo/registry:/root/.cargo/registry" -w /src \
             alpine:3.23 sh -euc '
               apk add --no-cache build-base linux-headers nodejs zstd-dev zstd-static llvm-libunwind-dev llvm-libunwind-static rustup
               rustup-init -y -q --profile minimal --default-toolchain "$TOOLCHAIN"
@@ -100,16 +104,28 @@ jobs:
 
       # Plain ustar, no macOS metadata files: lo's lib/untar.js reads ustar headers only (no pax records). One top
       # directory, ts-sema-<target>/: lo's untar recreates (empties) an existing first directory, so never "./".
+      # dist/debug/ (the split-off debug info) becomes its own asset, ts-sema-<target>-debug.tar.gz, and the SBOM is
+      # also an asset of its own, ts-sema-<target>.cdx.json (Intel macOS has neither shared library nor addon, so no
+      # debug asset).
       - name: package
         env:
           COPYFILE_DISABLE: 1
+          T: ts-sema-${{ matrix.target }}
         run: |
-          mkdir -p package && cp -R dist package/ts-sema-${{ matrix.target }}
-          tar --format=ustar -czf ts-sema-${{ matrix.target }}.tar.gz -C package ts-sema-${{ matrix.target }}
+          mkdir -p package && cp -R dist "package/$T" && rm -rf "package/$T/debug"
+          tar --format=ustar -czf "$T.tar.gz" -C package "$T"
+          if [ -d dist/debug ]; then
+            cp -R dist/debug "package/$T-debug"
+            tar --format=ustar -czf "$T-debug.tar.gz" -C package "$T-debug"
+          fi
+          cp dist/sbom.cdx.json "$T.cdx.json"
           cat dist/build.json
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ts-sema-${{ matrix.target }}
-          path: ts-sema-${{ matrix.target }}.tar.gz
+          path: |
+            ts-sema-${{ matrix.target }}.tar.gz
+            ts-sema-${{ matrix.target }}-debug.tar.gz
+            ts-sema-${{ matrix.target }}.cdx.json
           if-no-files-found: error

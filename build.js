@@ -4,6 +4,10 @@
 //   build.json     what was built: variant, target, RUSTFLAGS, the Bun commit, rustc's version, link flags
 //   libts_sema.so  with --shared (libts_sema.dylib on macOS): exports only the C ABI, for dlopen / any FFI
 //   ts_sema.node   with --napi: the N-API addon (bindings/napi) for Node, Bun and Deno
+//   debug/         the debug info split off the shared library and the addon, which are shipped stripped of it
+//                  (symbols kept): <file>.debug (Linux, found through the binary's gnu-debuglink or build-id) or
+//                  <file>.dSYM (macOS)
+//   sbom.cdx.json  the CycloneDX SBOM of what dist/ contains (sbom.js)
 //
 //   node build.js [--variant mimalloc|plain] [--target <triple>] [--toolchain <rustup toolchain>] [--jobs <n>]
 //                 [--nice <n>] [--cpus <taskset list>] [--mem-floor <MB>] [--native] [--lto off|thin|fat]
@@ -11,13 +15,14 @@
 //
 // --test links test/check.c against the result with build.json's link flags and runs it on test/fixture.
 // Needs a nightly Rust toolchain with cargo, and a C compiler (CC, default cc; CFLAGS are added) and ar (AR, default
-// ar) for mimalloc, LDFLAGS for --shared and --test.
+// ar) for mimalloc, LDFLAGS for --shared and --test; objcopy (OBJCOPY) on Linux and dsymutil + strip on macOS for
+// --shared and --napi.
 // rustc peaks at about 3 GB for the bun_sema crate. --jobs 1 keeps it to one rustc. --nice, --cpus (taskset) and
 // --mem-floor (Linux: kill the build when MemAvailable drops below it, or on heavy major-fault thrash) are for small
 // machines. Each variant/flag set is a full rebuild in target/.
 import { execFileSync, spawn } from 'node:child_process'
-import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(fileURLToPath(import.meta.url))
@@ -44,6 +49,7 @@ const lto = opt('--lto', 'off')
 const SYMBOLS = ['bun_sema_check', 'bun_sema_free', 'bun_sema_set_libs', 'bun_sema_builtin_lib']
 const CC = process.env.CC || 'cc'
 const AR = process.env.AR || 'ar'
+const OBJCOPY = process.env.OBJCOPY || 'objcopy'
 // Extra C flags for mimalloc, e.g. "-arch x86_64" when building for Intel macOS on Apple silicon.
 const CFLAGS = (process.env.CFLAGS || '').split(' ').filter(Boolean)
 // Extra linker flags for --shared and --test, e.g. "-L/opt/homebrew/lib" for libzstd.
@@ -105,7 +111,7 @@ if (variant === 'mimalloc') {
     'MI_BUILD_RELEASE', 'MI_CMAKE_BUILD_TYPE=release']
   // musl: local-dynamic TLS, as Bun does.
   if (musl) defines.push('MI_LIBC_MUSL=1')
-  const ccArgs = ['-x', 'c', '-O3', '-fPIC', '-fvisibility=hidden', ...(musl ? ['-ftls-model=local-dynamic'] : []),
+  const ccArgs = ['-x', 'c', '-O3', '-g1', '-fPIC', '-fvisibility=hidden', ...(musl ? ['-ftls-model=local-dynamic'] : []),
     '-Wno-deprecated', ...CFLAGS, ...defines.map(d => `-D${d}`), `-I${join(root, 'vendor/mimalloc/include')}`,
     '-c', join(root, 'vendor/mimalloc/src/static.c'), '-o', object]
   run(...limited(CC, ccArgs), { stdio: 'inherit' })
@@ -120,7 +126,6 @@ const cargoEnv = {
   ...env,
   RUSTFLAGS: rustflags.join(' '),
   BUN_CODEGEN_DIR: join(root, 'codegen'),
-  CARGO_PROFILE_RELEASE_DEBUG: 'false',
   CARGO_PROFILE_RELEASE_LTO: lto
 }
 log(`RUSTFLAGS=${cargoEnv.RUSTFLAGS} LTO=${lto}`)
@@ -185,6 +190,29 @@ const darwin = triple.includes('apple')
 const nativeLibs = readFileSync(logFile, 'utf8').match(/native-static-libs: (.*)$/m)?.[1].trim().split(/\s+/) || []
 const link = [darwin ? '-Wl,-dead_strip' : '-Wl,--gc-sections', '-lzstd', ...nativeLibs.filter(l => l !== '-lzstd')]
 
+// Debug info: line tables for everything (capi/Cargo.toml's debug = "line-tables-only", Bun's; -g1 for the C), so a
+// crash in a release build maps to file:line with the debug asset. The shared library and the addon ship without
+// it; it goes to dist/debug/ (a release asset of its own). Linux: objcopy --only-keep-debug, then --strip-debug with a gnu-debuglink to it (gdb also finds it by build-id, as
+// /usr/lib/debug/.build-id/xx/rest.debug); macOS: dsymutil, then strip -S. Both keep the symbol table, so backtraces
+// and profilers still show function names without the debug files. The static archive is left as it is.
+const debugDir = join(dist, 'debug')
+const debugIds = {}
+function splitDebug (file) {
+  mkdirSync(debugDir, { recursive: true })
+  const name = basename(file)
+  if (darwin) {
+    run('dsymutil', [file, '-o', join(debugDir, `${name}.dSYM`)], { stdio: 'inherit' })
+    run('strip', ['-S', file])
+    debugIds[name] = run('dwarfdump', ['--uuid', file]).match(/UUID: (\S+)/)?.[1] ?? null
+  } else {
+    const debug = join(debugDir, `${name}.debug`)
+    run(OBJCOPY, ['--only-keep-debug', file, debug])
+    run(OBJCOPY, ['--strip-debug', `--add-gnu-debuglink=${debug}`, file])
+    debugIds[name] = run('readelf', ['-n', file]).match(/Build ID: ([0-9a-f]+)/)?.[1] ?? null
+  }
+  log(`${name}: debug info split off (${darwin ? 'UUID' : 'build-id'} ${debugIds[name]})`)
+}
+
 // --shared: a shared library from the whole archive (mimalloc included) that exports only the C ABI, for dlopen and
 // any FFI. libts_sema.so on Linux, libts_sema.dylib (install name @rpath/libts_sema.dylib) on macOS.
 const sharedName = darwin ? 'libts_sema.dylib' : 'libts_sema.so'
@@ -196,6 +224,7 @@ if (flag('--shared') && darwin) {
     `-Wl,-exported_symbols_list,${list}`, '-Wl,-install_name,@rpath/libts_sema.dylib', ...LDFLAGS, ...link]),
   { stdio: 'inherit' })
   log(`${sharedName} linked`)
+  splitDebug(shared)
 } else if (flag('--shared')) {
   const map = join(work, 'ts_sema.map')
   const exported = [...SYMBOLS]
@@ -215,6 +244,7 @@ if (flag('--shared') && darwin) {
     archive, ...extra, '-Wl,--no-whole-archive', `-Wl,--version-script=${map}`,
     ...(pgoGen ? [] : ['-Wl,--no-undefined']), ...LDFLAGS, ...link]), { stdio: 'inherit' })
   log(`${sharedName} linked`)
+  splitDebug(shared)
 }
 
 // --napi: bindings/napi/ts_sema_napi.c as dist/ts_sema.node, an N-API addon for Node, Bun and Deno, with the archive
@@ -233,6 +263,37 @@ function findStatic (name, env) {
   }
   return null
 }
+// Which package installed a static library ts_sema.node links in, for the SBOM: Alpine's apk database, dpkg, or a
+// Homebrew Cellar path. Null fields when none of them knows the file.
+function ownerPackage (path) {
+  const real = (() => { try { return realpathSync(path) } catch { return resolve(path) } })()
+  const cellar = real.match(/\/Cellar\/([^/]+)\/([^/]+)\//)
+  if (cellar) return { package: cellar[1], version: cellar[2], manager: 'brew' }
+  if (existsSync('/lib/apk/db/installed')) {
+    for (const block of readFileSync('/lib/apk/db/installed', 'utf8').split('\n\n')) {
+      let dir = ''
+      const fields = { files: [] }
+      for (const line of block.split('\n')) {
+        if (line.startsWith('P:')) fields.package = line.slice(2)
+        else if (line.startsWith('V:')) fields.version = line.slice(2)
+        else if (line.startsWith('F:')) dir = line.slice(2)
+        else if (line.startsWith('R:')) fields.files.push(`/${dir}/${line.slice(2)}`)
+      }
+      if (fields.files.includes(real) || fields.files.includes(resolve(path))) {
+        return { package: fields.package, version: fields.version, manager: 'apk' }
+      }
+    }
+  }
+  for (const candidate of [real, resolve(path)]) {
+    try {
+      const pkg = run('dpkg', ['-S', candidate], { stdio: ['ignore', 'pipe', 'ignore'] }).split(':')[0]
+      const version = run('dpkg-query', ['-W', '-f=${Version}', pkg]).trim()
+      return { package: pkg, version, manager: 'dpkg' }
+    } catch {}
+  }
+  return { package: null, version: null, manager: null }
+}
+const linkedStatic = {}
 const addon = join(dist, 'ts_sema.node')
 if (flag('--napi')) {
   const statics = { '-lzstd': findStatic('libzstd.a', 'ZSTD_STATIC'), '-lunwind': findStatic('libunwind.a', 'UNWIND_STATIC') }
@@ -247,24 +308,31 @@ if (flag('--napi')) {
   if (darwin) {
     const list = join(work, 'napi.exports')
     writeFileSync(list, exported.map(e => `_${e}`).join('\n') + '\n')
-    run(...limited(CC, [...CFLAGS, '-O2', '-bundle', '-undefined', 'dynamic_lookup', '-o', addon, ...sources,
+    run(...limited(CC, [...CFLAGS, '-O2', '-g1', '-bundle', '-undefined', 'dynamic_lookup', '-o', addon, ...sources,
       `-Wl,-exported_symbols_list,${list}`, ...LDFLAGS, ...napiLink]), { stdio: 'inherit' })
   } else {
     const map = join(work, 'napi.map')
     writeFileSync(map, `{ global: ${exported.join('; ')}; local: *; };\n`)
-    run(...limited(CC, [...CFLAGS, '-O2', '-fPIC', '-shared', '-o', addon, ...sources, `-Wl,--version-script=${map}`,
+    run(...limited(CC, [...CFLAGS, '-O2', '-g1', '-fPIC', '-shared', '-o', addon, ...sources, `-Wl,--version-script=${map}`,
       ...LDFLAGS, ...napiLink]), { stdio: 'inherit' })
   }
   log(`ts_sema.node linked (static: ${Object.values(statics).filter(Boolean).join(' ') || 'none'})`)
+  splitDebug(addon)
+  for (const [lib, path] of Object.entries(statics)) {
+    if (path && link.includes(lib)) linkedStatic[lib.slice(2)] = { path, ...ownerPackage(path) }
+  }
 }
 
 const upstream = JSON.parse(readFileSync(join(root, 'upstream.json'), 'utf8'))
 const info = {
   variant, target: triple, rustc: rustcInfo.split('\n')[0], rustflags: cargoEnv.RUSTFLAGS, lto,
   bun: upstream.bun.commit, bun_version: upstream.bun.version, typescript: upstream.typescript,
-  builtin_libs: !flag('--no-builtin-libs'), symbols: SYMBOLS, link
+  builtin_libs: !flag('--no-builtin-libs'), symbols: SYMBOLS, link,
+  // ts_sema.node: the static libraries linked into it, and each stripped binary's build-id (macOS: UUID)
+  static: linkedStatic, debug_ids: debugIds
 }
 writeFileSync(join(dist, 'build.json'), JSON.stringify(info, null, 2) + '\n')
+run(process.execPath, [join(root, 'sbom.js')], { stdio: 'inherit' })
 
 // --test: link test/check.c against the archive the way an embedder would, and check test/fixture (one TS2322). With
 // --shared, also a build of it that loads the shared library with dlopen + dlsym, the way an FFI does.

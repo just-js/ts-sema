@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 // Releases ts-sema: sets the version in bindings/napi/package.json and commits that to main
-// ("chore: release <version> [skip ci]"), tags the commit, pushes main and the tag together, and publishes the GitHub
-// release that starts the release build (.github/workflows/release.yml: build every target, SHA256SUMS, attestations,
-// assets, then the npm packages with provenance). Node 20+, no dependencies.
+// ("chore: release <version>"; push.yml ignores that file, so it starts no push build), tags the commit, pushes main
+// and the tag together, and creates the GitHub release as a **draft**. The tag push starts the release build
+// (.github/workflows/release.yml: build every target, SHA256SUMS, attestations, the assets attached to the draft,
+// then it publishes the draft, verifies the published release and stages the npm packages with provenance). The
+// release is published only with all its assets, so it can be an immutable release. Node 20+, no dependencies.
 //
 //   node release.js [--dry-run] <version>        e.g. node release.js 0.0.2
 //
 // The tag is the version as given, no "v" (like lo's); a version with a "-" suffix is a GitHub prerelease (npm tag
 // "next"). Needs $GH_TOKEN or $GITHUB_TOKEN (Contents: Read and write). Local main must equal origin/main and be clean,
 // and the push build of the commit being released must have passed. --dry-run does every check and prints what would
-// happen. Re-running when the tag is already on origin at local main only publishes.
+// happen. Re-running when the tag is already on origin at local main only creates the draft, if it is missing.
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 
@@ -46,8 +48,8 @@ const remote = git('ls-remote', '--tags', 'origin', `refs/tags/${version}^{}`).s
 if (remote && remote !== sha) fail(`tag ${version} already exists on origin at ${remote}`)
 
 // The push build ("build on push") of the commit being released must have passed. A release commit
-// ("chore: release ... [skip ci]") has none, so on a re-run its parent is the one that was checked.
-const isReleaseCommit = /^chore: release \S+ \[skip ci\]$/.test(git('log', '-1', '--format=%s', sha))
+// ("chore: release ...", older ones with " [skip ci]") has none, so on a re-run its parent is the one that was checked.
+const isReleaseCommit = /^chore: release \S+( \[skip ci\])?$/.test(git('log', '-1', '--format=%s', sha))
 const built = isReleaseCommit ? git('rev-parse', `${sha}^`) : sha
 const runs = await (await fetch(`${api}/actions/runs?head_sha=${built}&event=push&per_page=20`, { headers })).json()
 const push = (runs.workflow_runs || []).find(r => r.name === 'build on push')
@@ -60,22 +62,30 @@ const pkgText = readFileSync(pkgPath, 'utf8')
 const bump = !remote && JSON.parse(pkgText).version !== version
 if (!remote && git('tag', '--list', version)) fail(`tag ${version} exists locally but not on origin`)
 
-const existing = await fetch(`${api}/releases/tags/${version}`, { headers })
-if (existing.status !== 404) fail(`release ${version} already exists (HTTP ${existing.status})`)
+// /releases/tags/<tag> doesn't return drafts: look through the list (drafts are visible with write access).
+const listed = await fetch(`${api}/releases?per_page=100`, { headers })
+if (!listed.ok) fail(`listing releases failed (HTTP ${listed.status})`)
+const existing = (await listed.json()).find(r => r.tag_name === version)
+if (existing && !existing.draft) fail(`release ${version} is already published: ${existing.html_url}`)
+if (existing) {
+  console.log(`draft release ${version} exists: ${existing.html_url}`)
+  console.log(`release build: https://github.com/${repo}/actions/workflows/release.yml`)
+  process.exit(0)
+}
 
 const up = JSON.parse(readFileSync(new URL('./upstream.json', import.meta.url), 'utf8'))
 const body = [
   `- Bun ${up.bun.version} ([${up.bun.commit.slice(0, 10)}](https://github.com/oven-sh/bun/commit/${up.bun.commit})), TypeScript ${up.typescript}`,
-  `- Built with Rust ${up.rust_toolchain}; assets: \`ts-sema-<target>.tar.gz\` (static + shared library, \`ts_sema.node\`, header, \`build.json\`), \`SHA256SUMS\``,
-  `- Verify: \`gh attestation verify ts-sema-<target>.tar.gz -R ${repo}\``
+  `- Built with Rust ${up.rust_toolchain}; assets: \`ts-sema-<target>.tar.gz\` (static + shared library, \`ts_sema.node\`, header, \`build.json\`, SBOM), \`ts-sema-<target>-debug.tar.gz\` (debug info), \`ts-sema-<target>.cdx.json\` (CycloneDX SBOM), \`SHA256SUMS\`, \`ts-sema-${version}.sigstore.json\` (the attestation bundle)`,
+  `- Verify: \`gh release verify ${version} -R ${repo}\`, \`gh attestation verify ts-sema-<target>.tar.gz -R ${repo}\`, or \`node verify.js ${version}\` in a clone`
 ].join('\n')
-const payload = { tag_name: version, name: version, body, draft: false, prerelease: version.includes('-') }
+const payload = { tag_name: version, name: version, body, draft: true, prerelease: version.includes('-') }
 
 if (dryRun) {
   const steps = []
-  if (bump) steps.push(`set bindings/napi/package.json to ${version} and commit "chore: release ${version} [skip ci]"`)
+  if (bump) steps.push(`set bindings/napi/package.json to ${version} and commit "chore: release ${version}"`)
   if (!remote) steps.push(`tag ${bump ? 'that commit' : sha} as ${version}, push ${bump ? 'main and ' : ''}the tag`)
-  steps.push(`publish ${payload.prerelease ? 'pre' : ''}release ${version} on ${repo}`)
+  steps.push(`create the draft ${payload.prerelease ? 'pre' : ''}release ${version} on ${repo}`)
   console.log(`would ${steps.join(', then ')}:`)
   console.log(JSON.stringify(payload, null, 2))
   process.exit(0)
@@ -84,9 +94,9 @@ if (dryRun) {
 if (bump) {
   writeFileSync(pkgPath, pkgText.replace(/("version":\s*")[^"]*(")/, `$1${version}$2`))
   git('add', 'bindings/napi/package.json')
-  git('commit', '-q', '-m', `chore: release ${version} [skip ci]`)
+  git('commit', '-q', '-m', `chore: release ${version}`)
   sha = git('rev-parse', 'HEAD')
-  console.log(`committed ${sha.slice(0, 7)}: chore: release ${version} [skip ci]`)
+  console.log(`committed ${sha.slice(0, 7)}: chore: release ${version}`)
 }
 if (!remote) {
   git('tag', '-a', version, '-m', `ts-sema ${version}`, sha)
@@ -96,5 +106,5 @@ if (!remote) {
 }
 const res = await fetch(`${api}/releases`, { method: 'POST', headers, body: JSON.stringify(payload) })
 if (res.status !== 201) fail(`creating release ${version} failed (HTTP ${res.status}): ${await res.text()}`)
-console.log(`published release ${version}: ${(await res.json()).html_url}`)
+console.log(`draft release ${version}: ${(await res.json()).html_url} (the release build attaches the assets and publishes it)`)
 console.log(`release build: https://github.com/${repo}/actions/workflows/release.yml`)

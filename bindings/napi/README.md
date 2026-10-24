@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@beardsoft/ts-sema)](https://www.npmjs.com/package/@beardsoft/ts-sema)
 [![CI](https://github.com/just-js/ts-sema/actions/workflows/push.yml/badge.svg)](https://github.com/just-js/ts-sema/actions/workflows/push.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/just-js/ts-sema/badge)](https://scorecard.dev/viewer/?uri=github.com/just-js/ts-sema)
 [![Socket Badge](https://badge.socket.dev/npm/package/@beardsoft/ts-sema/0.0.1)](https://badge.socket.dev/npm/package/@beardsoft/ts-sema/0.0.1)
 [![types](https://img.shields.io/npm/types/@beardsoft/ts-sema)](https://www.npmjs.com/package/@beardsoft/ts-sema)
 [![node](https://img.shields.io/node/v/@beardsoft/ts-sema)](https://www.npmjs.com/package/@beardsoft/ts-sema)
@@ -15,7 +16,7 @@ TypeScript install, and without node-gyp or any install script: npm downloads on
 - **Async or sync**: `check()` runs on a worker thread; `checkSync()` on the calling one
 - **Your own lib files**: limit a process to the standards you support (say ES2022 without DOM), from memory
 - **Also a C library**: the same binary works with `node:ffi`, `bun:ffi`, Python ctypes or C (`bun_sema_*`)
-- **Verifiable**: every release asset has a signed GitHub build attestation and a published SHA-256
+- **Verifiable**: no install scripts; npm provenance on every package, signed build attestations, an SBOM (see Security)
 
 ## Install
 
@@ -124,15 +125,46 @@ which can load ES modules. TypeScript types are included.
 
 Diagnostics are those of `bun check` at that Bun version (a port of typescript-go at that TypeScript version).
 
-## Verifying what you installed
+## Security
 
-- **The release assets** the npm packages are made from carry signed build provenance (Sigstore, GitHub Actions):
-  `gh attestation verify ts-sema-<target>.tar.gz -R just-js/ts-sema`, and are listed in the release's `SHA256SUMS`.
-  The packaging script checks every asset against `SHA256SUMS` before publishing.
-- **The npm packages** come from that same GitHub Actions release run, staged with npm trusted publishing (no
-  npm tokens) and made public only after a maintainer approves each version with 2FA. Each has an npm provenance
-  attestation linking it to the commit and workflow that built it (shown on its npm page; check with
-  `npm audit signatures`). 0.0.1 was published by hand and has registry signatures only.
+- **No install scripts, no dependencies**: installing runs no code; npm only downloads the one platform package
+  for your machine, a prebuilt `ts_sema.node`.
+- **Built in public CI**: every binary is built by GitHub Actions in [just-js/ts-sema](https://github.com/just-js/ts-sema)
+  from the tagged commit, never on a developer machine.
+- **Provenance**: each version of each package is published from that release workflow with npm trusted
+  publishing (no npm tokens) and carries an npm provenance attestation linking it to the commit and the run; the
+  release assets it is made from carry signed GitHub build attestations and are checked against the release's
+  `SHA256SUMS` before publishing.
+- **Immutable releases**: the GitHub release a version is made from is published only with all its assets and
+  can't be changed afterwards (from 0.0.3); the release workflow verifies it before staging anything on npm.
+- **Human approval**: CI can only stage a version; a maintainer approves each one with 2FA before it is public.
+- **SBOM**: each release has a CycloneDX SBOM per platform (`ts-sema-<target>.cdx.json` on the
+  [GitHub release](https://github.com/just-js/ts-sema/releases)): every crate compiled in, with licenses and
+  checksums, and the bundled C libraries.
+- **Debug symbols**: the addon ships without debug info (function names kept); the split-off debug files are a
+  release asset of their own (`ts-sema-<target>-debug.tar.gz`) for debugging a crash offline.
+- **Scanned**: CodeQL and OpenSSF Scorecard run on the repository; vulnerabilities can be reported privately
+  ([SECURITY.md](https://github.com/just-js/ts-sema/blob/main/SECURITY.md)).
+
+### Verifying what you installed
+
+```sh
+npm audit signatures        # registry signatures and provenance attestations of what you installed
+gh release verify <version> -R just-js/ts-sema                      # the GitHub release (0.0.3+)
+gh attestation verify ts-sema-<target>.tar.gz -R just-js/ts-sema    # a release asset you downloaded
+```
+
+Or everything at once from a clone of [just-js/ts-sema](https://github.com/just-js/ts-sema):
+`node verify.js <version> --npm`.
+
+0.0.1 was published by hand and has registry signatures only; 0.0.2 and later have provenance.
+
+### Scores and public records
+
+- [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/just-js/ts-sema): the repository's security practices
+- [deps.dev](https://deps.dev/npm/%40beardsoft%2Fts-sema): dependencies, advisories, provenance, Scorecard
+- [Socket](https://socket.dev/npm/package/@beardsoft/ts-sema): supply-chain analysis of the package
+- [GitHub attestations](https://github.com/just-js/ts-sema/attestations): the build attestations of the release assets
 
 ## License
 
