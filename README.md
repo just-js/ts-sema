@@ -21,6 +21,8 @@ The Bun commit, its TypeScript version and the rest of the pins are in
 | `patches/` | our patches to the vendored sources, applied by `sync.js` (none yet) |
 | `build.js` | builds `dist/` |
 | `sync.js` | refreshes `vendor/`, `codegen/`, `capi/Cargo.lock` and `upstream.json` from a Bun commit or tag |
+| `bindings/` | `napi/` (N-API addon for Node, Bun and Deno) and `ffi/` (examples for each runtime's FFI); see [`bindings/README.md`](bindings/README.md) |
+| `vendor/node-api-headers/` | the N-API C headers (npm `node-api-headers`, MIT), for `bindings/napi` |
 | `test/` | `check.c` and `fixture/`, the smoke test (`node build.js --test`) |
 | `.github/workflows/` | CI builds and the release assets (see Releases) |
 

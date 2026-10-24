@@ -3,10 +3,11 @@
 //   ts_sema.h      its header
 //   build.json     what was built: variant, target, RUSTFLAGS, the Bun commit, rustc's version, link flags
 //   libts_sema.so  with --shared (libts_sema.dylib on macOS): exports only the C ABI, for dlopen / any FFI
+//   ts_sema.node   with --napi: the N-API addon (bindings/napi) for Node, Bun and Deno
 //
 //   node build.js [--variant mimalloc|plain] [--target <triple>] [--toolchain <rustup toolchain>] [--jobs <n>]
 //                 [--nice <n>] [--cpus <taskset list>] [--mem-floor <MB>] [--native] [--lto off|thin|fat]
-//                 [--pgo-gen <dir>] [--pgo-use <file.profdata>] [--shared] [--test]
+//                 [--pgo-gen <dir>] [--pgo-use <file.profdata>] [--shared] [--napi] [--test]
 //
 // --test links test/check.c against the result with build.json's link flags and runs it on test/fixture.
 // Needs a nightly Rust toolchain with cargo, and a C compiler (CC, default cc; CFLAGS are added) and ar (AR, default
@@ -206,6 +207,46 @@ if (flag('--shared') && darwin) {
   log(`${sharedName} linked`)
 }
 
+// --napi: bindings/napi/ts_sema_napi.c as dist/ts_sema.node, an N-API addon for Node, Bun and Deno, with the archive
+// linked in. No node-gyp: plain cc against vendor/node-api-headers. The napi_* functions stay undefined and resolve
+// from the host process at load time (macOS: -undefined dynamic_lookup). libzstd (and on musl
+// LLVM's libunwind) go in statically when the .a can be found (ZSTD_STATIC / UNWIND_STATIC, the compiler's search
+// path, or LDFLAGS' -L directories), so the addon needs nothing installed; else the -l flag, with a warning.
+function findStatic (name, env) {
+  if (process.env[env]) return process.env[env]
+  try {
+    const found = run(CC, [...CFLAGS, `-print-file-name=${name}`]).trim()
+    if (found.startsWith('/') && existsSync(found)) return found
+  } catch {}
+  for (const flag of LDFLAGS) {
+    if (flag.startsWith('-L') && existsSync(join(flag.slice(2), name))) return join(flag.slice(2), name)
+  }
+  return null
+}
+const addon = join(dist, 'ts_sema.node')
+if (flag('--napi')) {
+  const statics = { '-lzstd': findStatic('libzstd.a', 'ZSTD_STATIC'), '-lunwind': findStatic('libunwind.a', 'UNWIND_STATIC') }
+  for (const [lib, path] of Object.entries(statics)) {
+    if (!path && link.includes(lib)) log(`warning: no static ${lib.slice(2)} found, ts_sema.node will need the system's`)
+  }
+  const napiLink = link.map(l => statics[l] || l)
+  const exported = ['napi_register_module_v1', 'node_api_module_get_api_version_v1']
+  const sources = [`-I${join(root, 'vendor/node-api-headers/include')}`, `-I${join(root, 'capi/include')}`,
+    join(root, 'bindings/napi/ts_sema_napi.c'), archive]
+  if (darwin) {
+    const list = join(work, 'napi.exports')
+    writeFileSync(list, exported.map(e => `_${e}`).join('\n') + '\n')
+    run(...limited(CC, [...CFLAGS, '-O2', '-bundle', '-undefined', 'dynamic_lookup', '-o', addon, ...sources,
+      `-Wl,-exported_symbols_list,${list}`, ...LDFLAGS, ...napiLink]), { stdio: 'inherit' })
+  } else {
+    const map = join(work, 'napi.map')
+    writeFileSync(map, `{ global: ${exported.join('; ')}; local: *; };\n`)
+    run(...limited(CC, [...CFLAGS, '-O2', '-fPIC', '-shared', '-o', addon, ...sources, `-Wl,--version-script=${map}`,
+      ...LDFLAGS, ...napiLink]), { stdio: 'inherit' })
+  }
+  log(`ts_sema.node linked (static: ${Object.values(statics).filter(Boolean).join(' ') || 'none'})`)
+}
+
 const upstream = JSON.parse(readFileSync(join(root, 'upstream.json'), 'utf8'))
 const info = {
   variant, target: triple, rustc: rustcInfo.split('\n')[0], rustflags: cargoEnv.RUSTFLAGS, lto,
@@ -228,6 +269,10 @@ if (flag('--test')) {
       { stdio: 'inherit' })
     run(dl, [join(root, 'test/fixture'), shared], { stdio: 'inherit' })
     log(`test passed (${sharedName} through dlopen)`)
+  }
+  if (existsSync(addon)) {
+    run(process.execPath, [join(root, 'bindings/napi/test.mjs'), addon], { stdio: 'inherit' })
+    log('test passed (ts_sema.node)')
   }
 }
 log(`done: ${archive}${existsSync(shared) ? ` and ${sharedName}` : ''}`)

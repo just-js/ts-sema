@@ -41,11 +41,13 @@ jobs:
             runs-on: macos-15
             cc: clang
             test: true
-          # Intel macOS, cross-built on Apple silicon (as lo's mac-x64 build is). No test: Homebrew's zstd is arm64.
+          # Intel macOS, cross-built on Apple silicon (as lo's mac-x64 build is). No test, shared library or addon:
+          # Homebrew's libzstd there is arm64 only, so nothing x86_64 can be linked (the static archive is fine).
           - target: x86_64-apple-darwin
             runs-on: macos-15
             cc: clang
             cflags: -arch x86_64
+            no-shared: true
     steps:
       - uses: actions/checkout@v7
 
@@ -79,10 +81,11 @@ jobs:
           CFLAGS: ${{ matrix.cflags }}
           LDFLAGS: ${{ runner.os == 'macOS' && '-L/opt/homebrew/lib' || '' }}
         run: |
-          node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} --shared ${{ matrix.test && '--test' || '' }}
+          node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} ${{ !matrix.no-shared && '--shared --napi' || '' }} ${{ matrix.test && '--test' || '' }}
 
       # Alpine 3.23 (lo's musl image base): linux-headers for mimalloc; zstd-dev and llvm-libunwind-dev for the test
-      # (rustc's native-static-libs for the musl target are -lunwind -lc: LLVM's libunwind); rustup for the nightly.
+      # (rustc's native-static-libs for the musl target are -lunwind -lc: LLVM's libunwind); their -static packages so
+      # ts_sema.node links them in and needs nothing installed; rustup for the nightly.
       # The host's cargo registry is mounted, so actions/cache covers it too.
       - name: build (Alpine)
         if: ${{ matrix.alpine }}
@@ -90,10 +93,10 @@ jobs:
           mkdir -p ~/.cargo/registry
           docker run --rm -e TOOLCHAIN -v "$PWD:/src" -v "$HOME/.cargo/registry:/root/.cargo/registry" -w /src \
             alpine:3.23 sh -euc '
-              apk add --no-cache build-base linux-headers nodejs zstd-dev llvm-libunwind-dev rustup
+              apk add --no-cache build-base linux-headers nodejs zstd-dev zstd-static llvm-libunwind-dev llvm-libunwind-static rustup
               rustup-init -y -q --profile minimal --default-toolchain "$TOOLCHAIN"
               . /root/.cargo/env
-              CC=gcc node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} --shared --test'
+              CC=gcc node build.js --toolchain "$TOOLCHAIN" --target ${{ matrix.target }} --shared --napi --test'
 
       # Plain ustar, no macOS metadata files: lo's lib/untar.js reads ustar headers only (no pax records). One top
       # directory, ts-sema-<target>/: lo's untar recreates (empties) an existing first directory, so never "./".
