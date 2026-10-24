@@ -128,7 +128,8 @@ const common = {
 // contains), and the tools that made and published it, from .github/npm/package-lock.json with the lock's integrity
 // hashes, as scope "excluded" (build time only, not part of what is installed).
 function mainSbom (name, platforms) {
-  const purl = (n, v) => `pkg:npm/${n.replace('@', '%40')}@${v}`
+  // purl: each segment of the name percent-encoded (@scope/name -> %40scope/name)
+  const purl = (n, v) => `pkg:npm/${n.split('/').map(encodeURIComponent).join('/')}@${v}`
   const integrity = i => {
     const [alg, b64] = (i || '').split('-')
     return alg && b64 ? [{ alg: alg.toUpperCase().replace('SHA', 'SHA-'), content: Buffer.from(b64, 'base64').toString('hex') }] : []

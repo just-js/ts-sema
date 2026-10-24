@@ -201,6 +201,9 @@ function splitDebug (file) {
   mkdirSync(debugDir, { recursive: true })
   const name = basename(file)
   if (darwin) {
+    // clang runs dsymutil itself when one command compiles and links with -g (the addon: .c + link), leaving
+    // <file>.dSYM next to the output, in dist/; the one in dist/debug/ is the one that ships.
+    rmSync(`${file}.dSYM`, { recursive: true, force: true })
     run('dsymutil', [file, '-o', join(debugDir, `${name}.dSYM`)], { stdio: 'inherit' })
     run('strip', ['-S', file])
     debugIds[name] = run('dwarfdump', ['--uuid', file]).match(/UUID: (\S+)/)?.[1] ?? null
