@@ -29,6 +29,6 @@ debug = "line-tables-only"
 strip = "none"
 panic = "abort"
 
-# build.js --variant mimalloc sets it (RUSTFLAGS --cfg bun_sema_mimalloc).
+# Set by build.js: --variant mimalloc (bun_sema_mimalloc), --no-builtin-libs (ts_sema_no_builtin_libs).
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bun_sema_mimalloc)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bun_sema_mimalloc)', 'cfg(ts_sema_no_builtin_libs)'] }

@@ -3,6 +3,12 @@
 //
 //   checkSync(project, libDir, threads) -> report JSON string
 //   check(project, libDir, threads)     -> Promise of the report JSON string, checked on a libuv worker thread
+//   setLibs(names, texts)               -> replaces the built-in lib files (arrays of strings); copied once, kept
+//   builtinLib(name)                    -> a built-in lib file's text, or null; with no name, a JSON array of names
+//
+// The same file is also a plain shared library for any FFI: it exports bun_sema_check/bun_sema_free (ts_sema.h), and
+// its references to N-API are weak, so dlopen succeeds in processes without N-API (Python ctypes, C, RTLD_NOW); the
+// napi_* functions are only called when Node or Bun loads it as an addon.
 //
 // project: a tsconfig.json or its directory. libDir: a directory of lib.*.d.ts files, or null/undefined/"" for the
 // built-in ones. threads: 0 for one per core. index.js parses the report. Checks run one at a time (a mutex): ts-sema
@@ -10,9 +16,33 @@
 #define NAPI_VERSION 8
 #include <node_api.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include "ts_sema.h"
+
+// Every N-API function used below: weak references (null when no N-API host is loaded).
+#pragma weak napi_create_async_work
+#pragma weak napi_create_error
+#pragma weak napi_create_promise
+#pragma weak napi_create_string_utf8
+#pragma weak napi_define_properties
+#pragma weak napi_delete_async_work
+#pragma weak napi_get_cb_info
+#pragma weak napi_get_last_error_info
+#pragma weak napi_get_value_string_utf8
+#pragma weak napi_get_value_uint32
+#pragma weak napi_queue_async_work
+#pragma weak napi_reject_deferred
+#pragma weak napi_resolve_deferred
+#pragma weak napi_throw_error
+#pragma weak napi_throw_type_error
+#pragma weak napi_typeof
+#pragma weak napi_get_array_length
+#pragma weak napi_get_element
+#pragma weak napi_get_null
+#pragma weak napi_is_exception_pending
+#pragma weak napi_get_undefined
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -43,7 +73,7 @@ static char *string_arg(napi_env env, napi_value value, int required) {
   napi_valuetype type;
   if (napi_typeof(env, value, &type) != napi_ok) return NULL;
   if (type != napi_string) {
-    if (required) napi_throw_type_error(env, NULL, "project must be a string");
+    if (required) napi_throw_type_error(env, NULL, "expected a string");
     return NULL;
   }
   size_t len = 0;
@@ -154,10 +184,83 @@ static napi_value check_async(napi_env env, napi_callback_info info) {
   return promise;
 }
 
+// setLibs(names, texts): copies the strings into memory that is never freed (bun_sema_set_libs borrows them).
+static napi_value set_libs(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  CALL(env, napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  uint32_t count = 0, texts_count = 0;
+  if (argc < 2 || napi_get_array_length(env, argv[0], &count) != napi_ok ||
+      napi_get_array_length(env, argv[1], &texts_count) != napi_ok || count != texts_count) {
+    napi_throw_type_error(env, NULL, "setLibs(names, texts): two arrays of strings of the same length");
+    return NULL;
+  }
+  const char **names = calloc(count ? count : 1, sizeof(char *));
+  const char **texts = calloc(count ? count : 1, sizeof(char *));
+  size_t *lens = calloc(count ? count : 1, sizeof(size_t));
+  int ok = names && texts && lens;
+  for (uint32_t i = 0; ok && i < count; i++) {
+    napi_value name, text;
+    ok = napi_get_element(env, argv[0], i, &name) == napi_ok && napi_get_element(env, argv[1], i, &text) == napi_ok;
+    char *n = ok ? string_arg(env, name, 1) : NULL;
+    char *t = ok ? string_arg(env, text, 1) : NULL;
+    if (!n || !t) {
+      free(n);
+      free(t);
+      ok = 0;
+      break;
+    }
+    names[i] = n;
+    texts[i] = t;
+    lens[i] = strlen(t);
+  }
+  int result = ok ? bun_sema_set_libs(names, texts, lens, count) : -2;
+  if (result != 0) {
+    for (uint32_t i = 0; i < count && names && texts; i++) {
+      free((void *)names[i]);
+      free((void *)texts[i]);
+    }
+    free(names);
+    free(texts);
+    free(lens);
+    bool pending = false;
+    napi_is_exception_pending(env, &pending);
+    if (!pending) {
+      napi_throw_error(env, NULL, result == -1 ? "setLibs: already set, or a check already ran"
+        : "setLibs: a name or text isn't a string, or a name appears twice");
+    }
+    return NULL;
+  }
+  napi_value undefined;
+  CALL(env, napi_get_undefined(env, &undefined));
+  return undefined;
+}
+
+static napi_value builtin_lib(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  CALL(env, napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  char *name = argc > 0 ? string_arg(env, argv[0], 0) : NULL;
+  size_t len = 0;
+  char *text = bun_sema_builtin_lib(name, &len);
+  free(name);
+  napi_value result;
+  if (!text) {
+    CALL(env, napi_get_null(env, &result));
+    return result;
+  }
+  napi_status status = napi_create_string_utf8(env, text, len, &result);
+  bun_sema_free(text);
+  CALL(env, status);
+  return result;
+}
+
 NAPI_MODULE_INIT() {
   napi_property_descriptor props[] = {
     { "checkSync", NULL, check_sync, NULL, NULL, NULL, napi_enumerable, NULL },
     { "check", NULL, check_async, NULL, NULL, NULL, napi_enumerable, NULL },
+    { "setLibs", NULL, set_libs, NULL, NULL, NULL, napi_enumerable, NULL },
+    { "builtinLib", NULL, builtin_lib, NULL, NULL, NULL, napi_enumerable, NULL },
   };
   CALL(env, napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props));
   return exports;

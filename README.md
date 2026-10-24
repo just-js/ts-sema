@@ -23,6 +23,7 @@ The Bun commit, its TypeScript version and the rest of the pins are in
 | `sync.js` | refreshes `vendor/`, `codegen/`, `capi/Cargo.lock` and `upstream.json` from a Bun commit or tag |
 | `bindings/` | `napi/` (N-API addon for Node, Bun and Deno) and `ffi/` (examples for each runtime's FFI); see [`bindings/README.md`](bindings/README.md) |
 | `vendor/node-api-headers/` | the N-API C headers (npm `node-api-headers`, MIT), for `bindings/napi` |
+| `libs.js` | writes a set of built-in lib files (plus what they reference) to a directory; `--list` |
 | `test/` | `check.c` and `fixture/`, the smoke test (`node build.js --test`) |
 | `.github/workflows/` | CI builds and the release assets (see Releases) |
 
@@ -77,6 +78,7 @@ Options:
 - `--nice <n>`, `--cpus <list>` (taskset), `--mem-floor <MB>`: limits for small
   machines. With `--mem-floor`, the build is killed when available memory drops
   below it or major faults spike (Linux).
+- `--no-builtin-libs`: no TypeScript lib files built in (see the C ABI).
 - `--pgo-gen <dir>` / `--pgo-use <file>`: profile-guided optimization. Train an
   instrumented `--shared` build on some projects, merge with `llvm-profdata merge`,
   rebuild with `--pgo-use`. Worth 8-9% on top of mimalloc. A profile is only valid
@@ -107,6 +109,8 @@ silicon; the test runs on the gnu and Apple-silicon builds.
 ```c
 char *bun_sema_check(const char *project, const char *ts_lib_dir, uint32_t threads, size_t *len);
 void bun_sema_free(char *report);
+int bun_sema_set_libs(const char *const *names, const char *const *texts, const size_t *lens, size_t count);
+char *bun_sema_builtin_lib(const char *name, size_t *len);
 ```
 
 `project` is a tsconfig.json or its directory. `ts_lib_dir` NULL or "" uses the
@@ -115,6 +119,20 @@ JSON report, `{"ok", "errors", "files_loaded", "files_checked", "load_ms",
 "check_ms", "output"}`, where `output` is what `bun check --no-pretty` prints.
 Free it with `bun_sema_free`, never `free`. The library is built with
 `panic = "abort"`, so a panic in the checker ends the process.
+
+**Lib files.** By default the checker uses the built-in TypeScript `lib.*.d.ts`
+files (all 108 of its own TypeScript version, 339 KB compressed).
+`bun_sema_set_libs` replaces them, for the rest of the process and before the
+first check, with files the embedder passes in memory (`"lib.es2022.d.ts"` →
+text). Only those then exist, so a tsconfig asking for another lib gets
+TypeScript's own "cannot find lib" error: that's how an embedder limits the
+standards it supports. The texts are borrowed, not copied, so they must live as
+long as the process (embedded data is ideal). A set must include what its files
+reference (`/// <reference lib="..." />`). `bun_sema_builtin_lib` returns a
+built-in file's text (or, with a NULL name, a JSON array of names), and
+[`libs.js`](libs.js) (`node libs.js <out dir> es2022 dom`) writes such a set
+to a directory. `build.js --no-builtin-libs` leaves the built-in files out;
+then `bun_sema_set_libs` or a lib directory is needed.
 
 To keep the library's own symbols (Rust's std, mimalloc's `mi_*`, Bun's
 stand-ins for its C/C++ side) from clashing with the embedder's, link it into

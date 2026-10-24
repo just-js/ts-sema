@@ -7,7 +7,7 @@
 //
 //   node build.js [--variant mimalloc|plain] [--target <triple>] [--toolchain <rustup toolchain>] [--jobs <n>]
 //                 [--nice <n>] [--cpus <taskset list>] [--mem-floor <MB>] [--native] [--lto off|thin|fat]
-//                 [--pgo-gen <dir>] [--pgo-use <file.profdata>] [--shared] [--napi] [--test]
+//                 [--pgo-gen <dir>] [--pgo-use <file.profdata>] [--no-builtin-libs] [--shared] [--napi] [--test]
 //
 // --test links test/check.c against the result with build.json's link flags and runs it on test/fixture.
 // Needs a nightly Rust toolchain with cargo, and a C compiler (CC, default cc; CFLAGS are added) and ar (AR, default
@@ -40,6 +40,8 @@ const memFloor = Number(opt('--mem-floor', 0))
 const pgoGen = opt('--pgo-gen')
 const pgoUse = opt('--pgo-use')
 const lto = opt('--lto', 'off')
+// The C ABI (capi/include/ts_sema.h): the only symbols the shared library and the addon export.
+const SYMBOLS = ['bun_sema_check', 'bun_sema_free', 'bun_sema_set_libs', 'bun_sema_builtin_lib']
 const CC = process.env.CC || 'cc'
 const AR = process.env.AR || 'ar'
 // Extra C flags for mimalloc, e.g. "-arch x86_64" when building for Intel macOS on Apple silicon.
@@ -66,17 +68,25 @@ log(`${variant} for ${triple}, ${rustcInfo.split('\n')[0]}`)
 
 // Newer nightlies split `allocator_api`, and Bun (pinned to an older nightly) only enables the old feature. A rustc
 // that knows `allocator_ext` gets it enabled in every crate; one that doesn't never needed it.
+// The probe's output goes to a scratch file, never /dev/null: rustc writes a temporary file and renames it over its
+// output path, so as root `-o /dev/null` replaces the device with a regular file (found 2026-10-24).
 function knowsFeature (name) {
+  mkdirSync(work, { recursive: true })
+  const out = join(work, 'probe.rmeta')
   try {
-    run('rustc', [`-Zcrate-attr=feature(${name})`, '--crate-type=lib', '--emit=metadata', '-o', '/dev/null', '-'],
+    run('rustc', [`-Zcrate-attr=feature(${name})`, '--crate-type=lib', '--emit=metadata', '-o', out, '-'],
       { input: '', stdio: ['pipe', 'ignore', 'ignore'] })
     return true
   } catch {
     return false
+  } finally {
+    rmSync(out, { force: true })
   }
 }
 // --print=native-static-libs: rustc lists the system libraries the staticlib needs (into the cargo log), for build.json.
 const rustflags = ['--cap-lints=warn', '--print=native-static-libs']
+// --no-builtin-libs: no TypeScript lib files in the library; embedders supply them (bun_sema_set_libs or a directory).
+if (flag('--no-builtin-libs')) rustflags.push('--cfg', 'ts_sema_no_builtin_libs')
 if (knowsFeature('allocator_ext')) rustflags.push('-Zcrate-attr=feature(allocator_ext)')
 if (variant === 'mimalloc') rustflags.push('--cfg', 'bun_sema_mimalloc')
 if (flag('--native')) rustflags.push('-C', 'target-cpu=native')
@@ -181,14 +191,14 @@ const sharedName = darwin ? 'libts_sema.dylib' : 'libts_sema.so'
 const shared = join(dist, sharedName)
 if (flag('--shared') && darwin) {
   const list = join(work, 'ts_sema.exports')
-  writeFileSync(list, '_bun_sema_check\n_bun_sema_free\n')
+  writeFileSync(list, SYMBOLS.map(name => `_${name}\n`).join(''))
   run(...limited(CC, [...CFLAGS, '-dynamiclib', '-o', shared, '-Wl,-all_load', archive,
     `-Wl,-exported_symbols_list,${list}`, '-Wl,-install_name,@rpath/libts_sema.dylib', ...LDFLAGS, ...link]),
   { stdio: 'inherit' })
   log(`${sharedName} linked`)
 } else if (flag('--shared')) {
   const map = join(work, 'ts_sema.map')
-  const exported = ['bun_sema_check', 'bun_sema_free']
+  const exported = [...SYMBOLS]
   const extra = []
   if (pgoGen) {
     // A Rust staticlib doesn't carry the LLVM profiler runtime (rustc adds it only to final binaries): link the
@@ -230,7 +240,8 @@ if (flag('--napi')) {
     if (!path && link.includes(lib)) log(`warning: no static ${lib.slice(2)} found, ts_sema.node will need the system's`)
   }
   const napiLink = link.map(l => statics[l] || l)
-  const exported = ['napi_register_module_v1', 'node_api_module_get_api_version_v1']
+  // The N-API entry points, and the C ABI: the addon doubles as the shared library for FFI (its napi_* imports are weak).
+  const exported = ['napi_register_module_v1', 'node_api_module_get_api_version_v1', ...SYMBOLS]
   const sources = [`-I${join(root, 'vendor/node-api-headers/include')}`, `-I${join(root, 'capi/include')}`,
     join(root, 'bindings/napi/ts_sema_napi.c'), archive]
   if (darwin) {
@@ -251,7 +262,7 @@ const upstream = JSON.parse(readFileSync(join(root, 'upstream.json'), 'utf8'))
 const info = {
   variant, target: triple, rustc: rustcInfo.split('\n')[0], rustflags: cargoEnv.RUSTFLAGS, lto,
   bun: upstream.bun.commit, bun_version: upstream.bun.version, typescript: upstream.typescript,
-  symbols: ['bun_sema_check', 'bun_sema_free'], link
+  builtin_libs: !flag('--no-builtin-libs'), symbols: SYMBOLS, link
 }
 writeFileSync(join(dist, 'build.json'), JSON.stringify(info, null, 2) + '\n')
 

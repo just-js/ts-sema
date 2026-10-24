@@ -7,6 +7,10 @@
 //! // length (without the NUL) in *len. Free it with bun_sema_free.
 //! char *bun_sema_check(const char *project, const char *ts_lib_dir, uint32_t threads, size_t *len);
 //! void bun_sema_free(char *report);
+//! // Replaces the built-in lib files with `count` borrowed ones for the rest of the process (before the first check).
+//! int bun_sema_set_libs(const char *const *names, const char *const *texts, const size_t *lens, size_t count);
+//! // A built-in lib file's text, or with `name` NULL a JSON array of their names. Free it with bun_sema_free.
+//! char *bun_sema_builtin_lib(const char *name, size_t *len);
 //! ```
 //!
 //! The report: `{"ok", "errors", "files_loaded", "files_checked", "load_ms", "check_ms", "output"}`, where `output`
@@ -122,6 +126,7 @@ pub unsafe extern "C" fn bun_sema_check(
     let ts_lib_dir = (!ts_lib_dir.is_null())
         .then(|| unsafe { CStr::from_ptr(ts_lib_dir) }.to_bytes())
         .filter(|dir| !dir.is_empty());
+    libs::CHECKED.store(true, std::sync::atomic::Ordering::SeqCst);
     let json = check(project.to_bytes(), ts_lib_dir, threads);
     if !len.is_null() {
         // SAFETY: a non-null `len` points to a `size_t` (this function's contract).
@@ -139,4 +144,71 @@ pub unsafe extern "C" fn bun_sema_free(report: *mut c_char) {
         // SAFETY: it came from `CString::into_raw` in `bun_sema_check` (this function's contract).
         drop(unsafe { CString::from_raw(report) });
     }
+}
+
+/// Returns 0, -1 if a set was already registered or a check already ran, or -2 for a null pointer or a name twice.
+///
+/// # Safety
+/// `names`, `texts` and `lens` each point to `count` elements (or `count` is 0); each name is NUL-terminated and each
+/// text is `lens[i]` bytes of UTF-8. All of it is borrowed, not copied: it must stay valid and unchanged for the rest
+/// of the process (embedded data, or memory never freed).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bun_sema_set_libs(
+    names: *const *const c_char,
+    texts: *const *const c_char,
+    lens: *const usize,
+    count: usize,
+) -> i32 {
+    if count > 0 && (names.is_null() || texts.is_null() || lens.is_null()) {
+        return -2;
+    }
+    let mut files = Vec::with_capacity(count);
+    for i in 0..count {
+        // SAFETY: each array has `count` elements (this function's contract).
+        let (name, text, len) = unsafe { (*names.add(i), *texts.add(i), *lens.add(i)) };
+        if name.is_null() || (text.is_null() && len > 0) {
+            return -2;
+        }
+        // SAFETY: NUL-terminated names and `len`-byte texts that outlive the process's checks (this function's
+        // contract), so 'static is what the caller promises.
+        let name: &'static [u8] = unsafe { CStr::from_ptr(name) }.to_bytes();
+        let text: &'static [u8] = if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(text.cast(), len) } };
+        files.push((name, text));
+    }
+    match libs::register(files) {
+        Ok(()) => 0,
+        Err(libs::RegisterError::TooLate) => -1,
+        Err(libs::RegisterError::Duplicate) => -2,
+    }
+}
+
+/// # Safety
+/// `name` is null or NUL-terminated; `len` is null or points to a `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bun_sema_builtin_lib(name: *const c_char, len: *mut usize) -> *mut c_char {
+    let bytes = if name.is_null() {
+        let mut json = String::from("[");
+        for (i, name) in libs::builtin_names().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json_string(&mut json, &String::from_utf8_lossy(name));
+        }
+        json.push(']');
+        json.into_bytes()
+    } else {
+        // SAFETY: a non-null `name` is NUL-terminated (this function's contract).
+        match libs::builtin(unsafe { CStr::from_ptr(name) }.to_bytes()) {
+            Some(text) => text.into_owned(),
+            None => return std::ptr::null_mut(),
+        }
+    };
+    let Ok(text) = CString::new(bytes) else {
+        return std::ptr::null_mut();
+    };
+    if !len.is_null() {
+        // SAFETY: a non-null `len` points to a `size_t` (this function's contract).
+        unsafe { *len = text.as_bytes().len() };
+    }
+    text.into_raw()
 }
