@@ -2,7 +2,7 @@
 //   libts_sema.a   the library (with mimalloc.o added for the mimalloc variant)
 //   ts_sema.h      its header
 //   build.json     what was built: variant, target, RUSTFLAGS, the Bun commit, rustc's version, link flags
-//   libts_sema.so  with --shared only (Linux)
+//   libts_sema.so  with --shared (libts_sema.dylib on macOS): exports only the C ABI, for dlopen / any FFI
 //
 //   node build.js [--variant mimalloc|plain] [--target <triple>] [--toolchain <rustup toolchain>] [--jobs <n>]
 //                 [--nice <n>] [--cpus <taskset list>] [--mem-floor <MB>] [--native] [--lto off|thin|fat]
@@ -174,7 +174,18 @@ const darwin = triple.includes('apple')
 const nativeLibs = readFileSync(logFile, 'utf8').match(/native-static-libs: (.*)$/m)?.[1].trim().split(/\s+/) || []
 const link = [darwin ? '-Wl,-dead_strip' : '-Wl,--gc-sections', '-lzstd', ...nativeLibs.filter(l => l !== '-lzstd')]
 
-if (flag('--shared')) {
+// --shared: a shared library from the whole archive (mimalloc included) that exports only the C ABI, for dlopen and
+// any FFI. libts_sema.so on Linux, libts_sema.dylib (install name @rpath/libts_sema.dylib) on macOS.
+const sharedName = darwin ? 'libts_sema.dylib' : 'libts_sema.so'
+const shared = join(dist, sharedName)
+if (flag('--shared') && darwin) {
+  const list = join(work, 'ts_sema.exports')
+  writeFileSync(list, '_bun_sema_check\n_bun_sema_free\n')
+  run(...limited(CC, [...CFLAGS, '-dynamiclib', '-o', shared, '-Wl,-all_load', archive,
+    `-Wl,-exported_symbols_list,${list}`, '-Wl,-install_name,@rpath/libts_sema.dylib', ...LDFLAGS, ...link]),
+  { stdio: 'inherit' })
+  log(`${sharedName} linked`)
+} else if (flag('--shared')) {
   const map = join(work, 'ts_sema.map')
   const exported = ['bun_sema_check', 'bun_sema_free']
   const extra = []
@@ -189,10 +200,10 @@ if (flag('--shared')) {
   }
   writeFileSync(map, `{ global: ${exported.join('; ')}; local: *; };\n`)
   // Instrumentation keeps every function alive, including Bun code that refers to Bun's runtime: no --no-undefined.
-  run(...limited(CC, ['-shared', '-o', join(dist, 'libts_sema.so'), '-Wl,--whole-archive', archive, ...extra,
-    '-Wl,--no-whole-archive', `-Wl,--version-script=${map}`, ...(pgoGen ? [] : ['-Wl,--no-undefined']),
-    ...LDFLAGS, ...link]), { stdio: 'inherit' })
-  log('libts_sema.so linked')
+  run(...limited(CC, [...CFLAGS, '-shared', '-o', shared, '-Wl,-soname,libts_sema.so', '-Wl,--whole-archive',
+    archive, ...extra, '-Wl,--no-whole-archive', `-Wl,--version-script=${map}`,
+    ...(pgoGen ? [] : ['-Wl,--no-undefined']), ...LDFLAGS, ...link]), { stdio: 'inherit' })
+  log(`${sharedName} linked`)
 }
 
 const upstream = JSON.parse(readFileSync(join(root, 'upstream.json'), 'utf8'))
@@ -203,11 +214,20 @@ const info = {
 }
 writeFileSync(join(dist, 'build.json'), JSON.stringify(info, null, 2) + '\n')
 
-// --test: link test/check.c against the archive the way an embedder would, and check test/fixture (one TS2322).
+// --test: link test/check.c against the archive the way an embedder would, and check test/fixture (one TS2322). With
+// --shared, also a build of it that loads the shared library with dlopen + dlsym, the way an FFI does.
 if (flag('--test')) {
   const exe = join(work, 'check')
-  run(...limited(CC, [...CFLAGS, `-I${dist}`, join(root, 'test/check.c'), archive, ...LDFLAGS, ...link, '-o', exe]), { stdio: 'inherit' })
+  run(...limited(CC, [...CFLAGS, `-I${dist}`, join(root, 'test/check.c'), archive, ...LDFLAGS, ...link, '-o', exe]),
+    { stdio: 'inherit' })
   run(exe, [join(root, 'test/fixture')], { stdio: 'inherit' })
-  log('test passed')
+  log('test passed (static)')
+  if (existsSync(shared)) {
+    const dl = join(work, 'check-dl')
+    run(CC, [...CFLAGS, '-DTS_SEMA_DLOPEN', `-I${dist}`, join(root, 'test/check.c'), ...(darwin ? [] : ['-ldl']), '-o', dl],
+      { stdio: 'inherit' })
+    run(dl, [join(root, 'test/fixture'), shared], { stdio: 'inherit' })
+    log(`test passed (${sharedName} through dlopen)`)
+  }
 }
-log(`done: ${archive}${existsSync(join(dist, 'libts_sema.so')) ? ' and libts_sema.so' : ''}`)
+log(`done: ${archive}${existsSync(shared) ? ` and ${sharedName}` : ''}`)

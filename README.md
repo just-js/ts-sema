@@ -52,9 +52,13 @@ node build.js --jobs 1 --nice 19    # on a small machine
 ```
 
 Outputs in `dist/`: `libts_sema.a`, `ts_sema.h`, `build.json` (variant, target,
-RUSTFLAGS, Bun commit, link flags), and with `--shared` also `libts_sema.so`
-(Linux). `--test` links [`test/check.c`](test/check.c) against the archive with
-those link flags and checks `test/fixture` (one expected TS2322). `CC`, `CFLAGS`
+RUSTFLAGS, Bun commit, link flags), and with `--shared` also a shared library,
+`libts_sema.so` (Linux) or `libts_sema.dylib` (macOS, install name
+`@rpath/libts_sema.dylib`), which exports only the two C functions, for `dlopen`
+and any FFI (Node/Bun/Deno FFI, Python ctypes, lo's `lib/ffi.js`, ...). `--test`
+links [`test/check.c`](test/check.c) against the archive with those link flags
+and checks `test/fixture` (one expected TS2322); with `--shared` it also loads the
+shared library through `dlopen` + `dlsym` and checks again. `CC`, `CFLAGS`
 (e.g. `-arch x86_64`), `AR` and `LDFLAGS` are honoured.
 
 Options:
@@ -84,7 +88,7 @@ Each set of flags is a full rebuild: cargo keeps its artifacts per RUSTFLAGS in
 [`.github/workflows`](.github/workflows): `push.yml` builds and tests every
 push to `main` and every PR; `release.yml` runs on a published release and
 uploads `ts-sema-<target>.tar.gz` (one directory, `ts-sema-<target>/`, with
-`dist/`'s files) for `x86_64`/`aarch64` Linux (gnu and musl) and macOS, plus
+`dist/`'s files: the static and the shared library, the header, `build.json`) for `x86_64`/`aarch64` Linux (gnu and musl) and macOS, plus
 `SHA256SUMS`. Each asset has a signed build provenance attestation (Sigstore,
 the release run's identity):
 
