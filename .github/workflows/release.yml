@@ -102,6 +102,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org
 
       # npm (11.15.0+ for staged publishing), publint and attw, pinned by hash in .github/npm/package-lock.json;
       # npm.js uses them from .github/npm/node_modules.
@@ -110,7 +111,20 @@ jobs:
           npm ci --prefix .github/npm --ignore-scripts --no-audit --no-fund
           .github/npm/node_modules/.bin/npm --version
 
-      # publint + attw on the packages first (npm.js --lint): any finding stops the job before anything is staged.
-      - name: stage
+      # npm.js writes the six packages to dist/npm/ from the verified release assets, and lints them (publint, attw):
+      # any finding stops the job before anything is staged.
+      - name: packages
         run: |
-          node npm.js "${{ github.ref_name }}" --lint --stage ${{ contains(github.ref_name, '-') && '--tag next' || '' }}
+          node npm.js "${{ github.ref_name }}" --lint
+
+      # npm stage publish in each package, in dist/npm/order.json's order (platform packages first, the main one
+      # last), with provenance; a prerelease goes to "next". Trusted publishing: npm uses this job's OIDC identity.
+      - name: npm stage publish
+        env:
+          DIST_TAG: ${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
+        run: |
+          for dir in $(node -p "require('./dist/npm/order.json').join(' ')"); do
+            echo "npm stage publish dist/npm/$dir"
+            (cd "dist/npm/$dir" && "$GITHUB_WORKSPACE/.github/npm/node_modules/.bin/npm" stage publish \
+              --access public --provenance --tag "$DIST_TAG")
+          done

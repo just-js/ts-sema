@@ -12,7 +12,8 @@
 // release workflow stages, because direct publishing from CI is off for these packages. --publish runs
 // `npm publish --access public` directly (by hand, with an npm login). In GitHub Actions both pass --provenance
 // (`npm stage publish` doesn't add it by itself). Either way the platform packages go first and the main package
-// last, so it never points at versions that aren't there. --lint first runs publint (--strict) on every package and
+// last, so it never points at versions that aren't there; dist/npm/order.json records that order (release.yml runs
+// npm stage publish itself, in that order, after npm.js --lint). --lint first runs publint (--strict) on every package and
 // attw (--profile esm-only: the main package is ESM only) on the main one, and stops on any finding; both are run
 // from .github/npm/node_modules (`npm ci --prefix .github/npm`: npm, publint and attw pinned by hash in its
 // package-lock.json, as release.yml does), else with npx at the same versions. Each package carries sbom.cdx.json:
@@ -25,7 +26,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 
@@ -237,6 +238,8 @@ try {
   writeFileSync(join(main, 'sbom.cdx.json'), JSON.stringify(mainSbom(template.name, packages), null, 2) + '\n')
   packages.push({ name: template.name, dir: main })
   log(`${template.name}: ${packages.length - 1} platform packages`)
+  // The publishing order (platform packages first, the main one last), for release.yml's npm stage publish loop.
+  writeFileSync(join(out, 'order.json'), JSON.stringify(packages.map(p => basename(p.dir))) + '\n')
 } finally {
   rmSync(work, { recursive: true, force: true })
 }
