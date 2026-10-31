@@ -5,7 +5,7 @@
   "license": "MIT",
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
-    "npm": "11.21.1",
+    "npm": "12.2.1",
     "publint": "0.3.25"
   }
 }
